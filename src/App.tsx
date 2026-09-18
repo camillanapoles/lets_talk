@@ -39,7 +39,7 @@ import {
   generateSmartSessionTitle,
 } from "./utils/sessionStorage";
 import { useDialeticaVoice } from "./hooks/useDialeticaVoice";
-import { AlertCircle, Download, X, Plus, Check } from "lucide-react";
+import { AlertCircle, Download, X, Plus, Check, Mic } from "lucide-react";
 
 const DEFAULT_FORMAL_ROUNDS: FormalRoundConfig[] = [
   {
@@ -812,10 +812,37 @@ export default function App() {
     setSessions(updated);
   };
 
-  // Start a completely fresh debate session
+  // Start a completely fresh debate session (auto-saves existing if it had content)
   const handleStartNewDebate = useCallback(() => {
     stopSpeaking();
     stopListening();
+    if (resetVoiceState) {
+      resetVoiceState("Nova conversa iniciada");
+    }
+
+    // Auto-save existing debate so the user never loses past discussions
+    if (messages.length > 0) {
+      const existing = currentSessionId ? sessions.find((s) => s.id === currentSessionId) : null;
+      const title = existing?.title || generateSmartSessionTitle(messages, formalState, debateMode);
+      const targetId = currentSessionId || `deb-${Date.now()}`;
+      const sessionToSave: DebateSession = {
+        id: targetId,
+        title,
+        createdAt: existing ? existing.createdAt : Date.now(),
+        updatedAt: Date.now(),
+        messages: [...messages],
+        debateMode,
+        formalState,
+        selectedModel,
+        selectedRole,
+        customTopic,
+        artifacts: [...sessionArtifacts],
+        summarySnippet: messages[0]?.content?.slice(0, 120),
+      };
+      const updated = saveDebateSession(sessionToSave);
+      setSessions(updated);
+    }
+
     setCurrentSessionId(null);
     setActiveSessionId(null);
     setMessages([]);
@@ -838,35 +865,63 @@ export default function App() {
       },
       concluded: false,
     });
+
     try {
       localStorage.removeItem("dialetica_chat_history");
       localStorage.removeItem("dialetica_current_artifacts");
       localStorage.removeItem("dialetica_current_session_id");
     } catch (e) {}
-  }, [stopSpeaking, stopListening]);
 
-  // Request new debate safely (non-blocking in-app modal if messages exist)
+    setIsNewDebateConfirmOpen(false);
+    showToast(
+      messages.length > 0
+        ? "Nova conversa iniciada. O debate anterior foi salvo em Sessões."
+        : "Nova conversa limpa pronta para iniciar!"
+    );
+  }, [
+    stopSpeaking,
+    stopListening,
+    resetVoiceState,
+    messages,
+    currentSessionId,
+    sessions,
+    formalState,
+    debateMode,
+    selectedModel,
+    selectedRole,
+    customTopic,
+    sessionArtifacts,
+    showToast,
+  ]);
+
+  // Request new debate directly executes the auto-save and reset
   const handleRequestNewDebate = useCallback(() => {
-    if (messages.length === 0) {
-      handleStartNewDebate();
-      showToast("Nova conversa pronta para iniciar!");
-      return;
-    }
-    setIsNewDebateConfirmOpen(true);
-  }, [messages.length, handleStartNewDebate, showToast]);
+    handleStartNewDebate();
+  }, [handleStartNewDebate]);
 
   const handleConfirmNewDebateWithSave = useCallback(() => {
-    handleSaveCurrentSession();
     handleStartNewDebate();
-    setIsNewDebateConfirmOpen(false);
-    showToast("Nova conversa iniciada. Debate anterior salvo em Sessões.");
-  }, [handleSaveCurrentSession, handleStartNewDebate, showToast]);
+  }, [handleStartNewDebate]);
 
   const handleConfirmNewDebateWithoutSave = useCallback(() => {
-    handleStartNewDebate();
+    stopSpeaking();
+    stopListening();
+    if (resetVoiceState) {
+      resetVoiceState("Nova conversa limpa");
+    }
+    setCurrentSessionId(null);
+    setActiveSessionId(null);
+    setMessages([]);
+    setSessionArtifacts([]);
+    setErrorMessage(null);
+    try {
+      localStorage.removeItem("dialetica_chat_history");
+      localStorage.removeItem("dialetica_current_artifacts");
+      localStorage.removeItem("dialetica_current_session_id");
+    } catch (e) {}
     setIsNewDebateConfirmOpen(false);
     showToast("Nova conversa limpa iniciada.");
-  }, [handleStartNewDebate, showToast]);
+  }, [stopSpeaking, stopListening, resetVoiceState, showToast]);
 
   // Add an artifact generated in the current session
   const handleAddArtifact = (artifact: Artifact) => {
@@ -949,10 +1004,11 @@ export default function App() {
           onOpenArtifactsModal={() => setIsArtifactsModalOpen(true)}
           onOpenSessionsModal={() => setIsSessionsModalOpen(true)}
           onOpenDiagnostics={() => setIsDiagnosticsModalOpen(true)}
+          onSelectSessionUIMode={(mode) => setSessionUIMode(mode)}
           onToggleSessionUIMode={() =>
             setSessionUIMode((prev) => (prev === "voice_live" ? "text_chat" : "voice_live"))
           }
-          onResetChat={handleRequestNewDebate}
+          onResetChat={handleStartNewDebate}
           isAndroidFrameMode={isAndroidFrameMode}
           onToggleAndroidFrame={() => setIsAndroidFrameMode(!isAndroidFrameMode)}
           onShareNotice={(msg) => showToast(msg)}
@@ -992,6 +1048,7 @@ export default function App() {
             selectedModel={selectedModel}
             debateMode={debateMode}
             formalState={formalState}
+            currentSessionTitle={sessions.find((s) => s.id === currentSessionId)?.title}
             onToggleMic={handleToggleMic}
             onStopSpeaking={stopSpeaking}
             onSwitchToTextMode={() => setSessionUIMode("text_chat")}
@@ -999,7 +1056,7 @@ export default function App() {
             onOpenFormalDebateModal={() => setIsDebateModeModalOpen(true)}
             onOpenArtifactsModal={() => setIsArtifactsModalOpen(true)}
             onOpenSessionsModal={() => setIsSessionsModalOpen(true)}
-            onStartNewDebate={handleRequestNewDebate}
+            onStartNewDebate={handleStartNewDebate}
             onAdvanceFormalRound={handleAdvanceFormalRound}
             onPlayAudioSnippet={(txt, role, b64) => speakText(txt, role, b64)}
             onRequestEvidence={(prompt) => handleSendMessage(prompt)}
@@ -1028,6 +1085,26 @@ export default function App() {
                 />
               ) : (
                 <div className="max-w-3xl mx-auto space-y-1">
+                  {/* Shared Session Context Bar in Text Mode */}
+                  <div className="flex items-center justify-between px-3 py-1.5 mb-2 rounded-xl bg-white/[0.03] border border-white/10 text-xs text-slate-400 backdrop-blur-sm">
+                    <div className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+                      <span className="font-semibold text-slate-300">
+                        {sessions.find((s) => s.id === currentSessionId)?.title || "Debate Atual Compartilhado"}
+                      </span>
+                      <span className="text-[10px] text-slate-500 font-mono">
+                        ({messages.length} {messages.length === 1 ? "turno" : "turnos"})
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => setSessionUIMode("voice_live")}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-500/40 text-cyan-200 text-[11px] font-semibold transition-all shadow-sm"
+                      title="Continuar este debate em modo de voz viva na Arena"
+                    >
+                      <Mic className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Continuar por Voz</span>
+                    </button>
+                  </div>
                   {messages.map((message) => (
                     <ChatMessageItem
                       key={message.id}

@@ -53,6 +53,7 @@ interface VoiceLiveArenaProps {
   onRequestEvidence?: (prompt: string) => void;
   onSetCustomTopic?: (newTopic: string) => void;
   onTriggerManualSend?: () => void;
+  currentSessionTitle?: string | null;
   errorMessage?: string | null;
   onClearError?: () => void;
   onRetry?: () => void;
@@ -87,6 +88,7 @@ export function VoiceLiveArena({
   onRequestEvidence,
   onSetCustomTopic,
   onTriggerManualSend,
+  currentSessionTitle,
   errorMessage,
   onClearError,
   onRetry,
@@ -240,14 +242,24 @@ export function VoiceLiveArena({
             <span>{debateMode === "formal" ? "Debate Formal Regrado" : "Discussão Aberta"}</span>
           </button>
 
-          {/* Persona Chip & New Debate Button */}
+          {/* Persona Chip, Active Session & New Debate Button */}
           <div className="flex items-center gap-1.5">
+            {currentSessionTitle && (
+              <span
+                className="hidden sm:inline-flex items-center gap-1 text-[11px] text-cyan-300 bg-cyan-950/40 px-2.5 py-1 rounded-full border border-cyan-500/25 truncate max-w-[150px]"
+                title={`Sessão atual: ${currentSessionTitle}`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"></span>
+                <span className="truncate">{currentSessionTitle}</span>
+              </span>
+            )}
+
             {onStartNewDebate && (
               <button
                 id="voice-arena-new-debate-top-btn"
                 onClick={onStartNewDebate}
                 className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-500/40 text-cyan-200 hover:text-white text-xs font-semibold transition-all shadow-sm"
-                title="Iniciar nova conversa / debate em branco"
+                title="Iniciar nova conversa / debate em branco (salva a anterior)"
               >
                 <Plus className="w-3 h-3 text-cyan-400" />
                 <span>Novo</span>
@@ -519,8 +531,98 @@ export function VoiceLiveArena({
         </div>
       </div>
 
-      {/* Live Clean Transcription Scroll Area */}
-      <div className="relative z-10 w-full max-h-[34vh] overflow-y-auto rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 p-3 sm:p-4 space-y-3 shadow-inner">
+      {/* Live Clean Transcription Scroll Area - Shared with Text Mode */}
+      <div className="relative z-10 w-full max-h-[38vh] sm:max-h-[44vh] overflow-y-auto rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 p-3 sm:p-4 space-y-3 shadow-inner">
+        {/* Session Status Header inside Transcript Area */}
+        <div className="flex items-center justify-between text-[11px] text-slate-400 pb-2 mb-1 border-b border-white/5">
+          <div className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+            <span className="text-slate-300 font-medium truncate max-w-[200px]">
+              {currentSessionTitle || "Nova Conversa Unificada"}
+            </span>
+          </div>
+          <span className="font-mono text-[10px] text-slate-400">
+            {messages.length === 0
+              ? "Sem mensagens"
+              : `${messages.length} ${messages.length === 1 ? "turno sincronizado" : "turnos sincronizados"}`}
+          </span>
+        </div>
+
+        {/* Empty State when Session has no messages yet */}
+        {messages.length === 0 && !liveTranscript && (
+          <div className="text-center py-6 text-xs text-slate-400">
+            <p className="text-slate-200 font-semibold mb-1">
+              Arena Pronta • Sessão Compartilhada
+            </p>
+            <p className="text-[11px] text-slate-400 max-w-sm mx-auto leading-relaxed">
+              Fale ao microfone ou digite no modo texto. Toda a conversa, réplicas e fact-checks pertencem à mesma sessão e estão 100% integrados em tempo real.
+            </p>
+          </div>
+        )}
+
+        {/* Chronological Unified Debate Stream */}
+        {messages.map((msg, idx) => {
+          const isUser = msg.role === "user";
+          const isLastModel = !isUser && idx === messages.length - 1;
+          const isCurrentlySpeakingThis = isLastModel && isSpeaking && activeSpeaker === "dialetica";
+
+          return (
+            <div
+              key={msg.id || idx}
+              className={`flex flex-col ${isUser ? "items-end" : "items-start"} space-y-1`}
+            >
+              {/* Turn Header */}
+              <div className="flex items-center gap-1.5 text-[10px] uppercase font-bold tracking-wider mb-0.5">
+                {isUser ? (
+                  <span className="text-slate-400">Você</span>
+                ) : (
+                  <>
+                    <span className="text-cyan-400">Dialética ({selectedRole.shortTitle})</span>
+                    {isCurrentlySpeakingThis && (
+                      <span className="flex h-2 w-2 relative">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* Message Bubble */}
+              {isUser ? (
+                <div className="bg-cyan-950/40 border border-cyan-500/30 text-cyan-100 rounded-2xl rounded-tr-none px-3.5 py-2 text-xs sm:text-sm max-w-[88%] shadow-sm">
+                  <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                  {msg.attachedImage && (
+                    <img
+                      src={msg.attachedImage.url}
+                      alt={msg.attachedImage.prompt || "Anexo"}
+                      className="mt-2 rounded-lg max-h-32 object-cover border border-cyan-500/20"
+                    />
+                  )}
+                </div>
+              ) : (
+                <div className="bg-[#111728]/95 border border-white/10 text-slate-100 rounded-2xl rounded-tl-none p-3.5 text-xs sm:text-sm leading-relaxed max-w-full shadow-md">
+                  <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                </div>
+              )}
+
+              {/* Fact Check Cards attached to this turn */}
+              {msg.factChecks && msg.factChecks.length > 0 && (
+                <div className="w-full space-y-2 mt-1.5">
+                  {msg.factChecks.map((fc, fIdx) => (
+                    <FactCheckCard
+                      key={fc.id || fIdx}
+                      intervention={fc}
+                      onPlayAudio={onPlayAudioSnippet}
+                      onRequestEvidence={onRequestEvidence}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
         {/* User's Current Live Speech Transcript (in real time) */}
         {liveTranscript && (
           <div className="flex flex-col items-end animate-in fade-in duration-100">
@@ -557,58 +659,11 @@ export function VoiceLiveArena({
           </div>
         )}
 
-        {/* Injected Latest Fact-Check Card (The Third Persona) */}
-        {latestFactCheck && (
-          <div className="animate-in slide-in-from-bottom-2 duration-200">
-            <FactCheckCard
-              intervention={latestFactCheck}
-              onPlayAudio={onPlayAudioSnippet}
-              onRequestEvidence={onRequestEvidence}
-            />
-          </div>
-        )}
-
-        {/* Latest Spoken Response from Dialética */}
-        {lastModelMsg && (
-          <div className="flex flex-col items-start">
-            <div className="flex items-center gap-1.5 text-[10px] uppercase font-bold text-cyan-400 tracking-wider mb-0.5">
-              <span>Dialética ({selectedRole.shortTitle})</span>
-              {isSpeaking && activeSpeaker === "dialetica" && (
-                <span className="flex h-2 w-2 relative">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
-                </span>
-              )}
-            </div>
-            <div className="bg-[#111728]/90 border border-white/10 text-slate-100 rounded-xl p-3 text-xs sm:text-sm leading-relaxed max-w-full">
-              <p className="line-clamp-6">
-                {lastModelMsg.content.replace(/[#*_`]/g, "").slice(0, 420)}
-                {lastModelMsg.content.length > 420 ? "..." : ""}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Previous User Prompt */}
-        {lastUserMsg && !liveTranscript && (
-          <div className="flex flex-col items-end opacity-75">
-            <span className="text-[10px] uppercase font-semibold text-slate-400 mb-0.5">
-              Sua última fala
-            </span>
-            <div className="bg-white/5 border border-white/10 text-slate-300 rounded-xl px-3 py-1.5 text-xs max-w-[85%]">
-              "{lastUserMsg.content.slice(0, 140)}"
-            </div>
-          </div>
-        )}
-
-        {messages.length === 0 && !liveTranscript && (
-          <div className="text-center py-4 text-xs text-slate-400">
-            <p className="text-slate-300 font-semibold mb-1">
-              Arena Dialética de Voz Pronta
-            </p>
-            <p className="text-[11px] text-slate-400 max-w-xs mx-auto leading-relaxed">
-              Fale ao microfone com naturalidade. O sistema detecta suas pausas automaticamente e você pode intervir por voz a qualquer momento para interromper o áudio.
-            </p>
+        {/* Dialética formulating response indicator */}
+        {vadPhase === "processing" && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-cyan-950/40 border border-cyan-500/30 text-cyan-300 text-xs animate-pulse">
+            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping"></span>
+            <span>Dialética formulando réplica dialética...</span>
           </div>
         )}
 

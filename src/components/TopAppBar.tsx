@@ -30,6 +30,7 @@ interface TopAppBarProps {
   onOpenArtifactsModal: () => void;
   onOpenSessionsModal: () => void;
   onOpenDiagnostics?: () => void;
+  onSelectSessionUIMode?: (mode: SessionUIMode) => void;
   onToggleSessionUIMode: () => void;
   onResetChat: () => void;
   isAndroidFrameMode: boolean;
@@ -51,6 +52,7 @@ export function TopAppBar({
   onOpenArtifactsModal,
   onOpenSessionsModal,
   onOpenDiagnostics,
+  onSelectSessionUIMode,
   onToggleSessionUIMode,
   onResetChat,
   isAndroidFrameMode,
@@ -120,7 +122,7 @@ export function TopAppBar({
       {/* Center Controls: Voice Live vs Text Mode Toggle */}
       <div className="flex items-center gap-1 bg-[#101728] p-1 rounded-xl border border-white/10 text-xs">
         <button
-          onClick={onToggleSessionUIMode}
+          onClick={() => (onSelectSessionUIMode ? onSelectSessionUIMode("voice_live") : onToggleSessionUIMode())}
           className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-medium transition-all ${
             sessionUIMode === "voice_live"
               ? "bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-sm"
@@ -133,7 +135,7 @@ export function TopAppBar({
         </button>
 
         <button
-          onClick={onToggleSessionUIMode}
+          onClick={() => (onSelectSessionUIMode ? onSelectSessionUIMode("text_chat") : onToggleSessionUIMode())}
           className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-medium transition-all ${
             sessionUIMode === "text_chat"
               ? "bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-sm"
