@@ -11,8 +11,8 @@ export const GEMINI_MODELS: ModelOption[] = [
     recommendedFor: "complex",
   },
   {
-    id: "gemini-3.5-flash",
-    name: "Gemini 3.5 Flash",
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
     badge: "Padrão Geral",
     badgeColor: "bg-cyan-500/20 text-cyan-300 border-cyan-500/40",
     description: "Equilíbrio supremo entre velocidade, rigor empírico e síntese dialética para tarefas gerais.",
@@ -47,7 +47,7 @@ export const DEBATE_ROLES: DebateRole[] = [
     description: "Focado em estudos revisados por pares, meta-análises estatísticas e evidências empíricas concretas.",
     iconName: "Microscope",
     epistemicFocus: "Meta-análises, Graus de Evidência, Teorema de Bayes & Metodologia",
-    defaultModel: "gemini-3.5-flash",
+    defaultModel: "gemini-3.8-flash",
   },
   {
     id: "first_principles",
@@ -65,7 +65,7 @@ export const DEBATE_ROLES: DebateRole[] = [
     description: "Examina o 'Hard Problem' da consciência, fisicalismo vs panpsiquismo, conectômica e IA.",
     iconName: "Brain",
     epistemicFocus: "Teoria da Informação Integrada, Espaço Global de Trabalho & Qualia",
-    defaultModel: "gemini-3.5-flash",
+    defaultModel: "gemini-3.8-flash",
   },
   {
     id: "adaptive_debate",
@@ -74,7 +74,7 @@ export const DEBATE_ROLES: DebateRole[] = [
     description: "Adapta o tom à linguagem do usuário (coloquial ou erudita) sem abrir mão do rigor de fatos.",
     iconName: "Sparkles",
     epistemicFocus: "Espelhamento Comunicativo, Síntese Hegeliana & Fatos Verificados",
-    defaultModel: "gemini-3.5-flash",
+    defaultModel: "gemini-3.8-flash",
   },
 ];
 
@@ -109,7 +109,7 @@ export const DEBATE_STARTERS: DebateTopic[] = [
     category: "Cosmologia",
     prompt: "Sob a análise bayesiana, a ausência de assinaturas tecnológicas observáveis no universo observável torna mais provável que o Grande Filtro esteja atrás de nós (origem da vida) ou à nossa frente (autodestruição/IA)?",
     roleId: "empirical_rigor",
-    modelId: "gemini-3.5-flash",
+    modelId: "gemini-3.8-flash",
   },
   {
     id: "hume-guillotine",

@@ -10,6 +10,9 @@ import {
   MessageSquare,
   Scale,
   FileText,
+  FolderOpen,
+  Plus,
+  Check,
 } from "lucide-react";
 
 interface TopAppBarProps {
@@ -17,15 +20,19 @@ interface TopAppBarProps {
   selectedModel: ModelId;
   debateMode: DebateMode;
   sessionUIMode: SessionUIMode;
+  savedSessionsCount?: number;
+  currentSessionTitle?: string | null;
   onOpenRoleSelector: () => void;
   onOpenModelSelector: () => void;
   onOpenEpistemicGuide: () => void;
   onOpenDebateModeModal: () => void;
   onOpenArtifactsModal: () => void;
+  onOpenSessionsModal: () => void;
   onToggleSessionUIMode: () => void;
   onResetChat: () => void;
   isAndroidFrameMode: boolean;
   onToggleAndroidFrame: () => void;
+  onShareNotice?: (msg: string) => void;
 }
 
 export function TopAppBar({
@@ -33,15 +40,19 @@ export function TopAppBar({
   selectedModel,
   debateMode,
   sessionUIMode,
+  savedSessionsCount = 0,
+  currentSessionTitle,
   onOpenRoleSelector,
   onOpenModelSelector,
   onOpenEpistemicGuide,
   onOpenDebateModeModal,
   onOpenArtifactsModal,
+  onOpenSessionsModal,
   onToggleSessionUIMode,
   onResetChat,
   isAndroidFrameMode,
   onToggleAndroidFrame,
+  onShareNotice,
 }: TopAppBarProps) {
   const handleShare = () => {
     if (navigator.share) {
@@ -54,7 +65,9 @@ export function TopAppBar({
         .catch(() => {});
     } else {
       navigator.clipboard.writeText(window.location.href);
-      alert("Link público do aplicativo copiado para a área de transferência!");
+      if (onShareNotice) {
+        onShareNotice("Link público do aplicativo copiado para a área de transferência!");
+      }
     }
   };
 
@@ -132,6 +145,25 @@ export function TopAppBar({
 
       {/* Right Controls */}
       <div className="flex items-center gap-1">
+        {/* Sessions Manager Button */}
+        <button
+          id="sessions-manager-btn"
+          onClick={onOpenSessionsModal}
+          className="relative p-2 rounded-xl text-slate-300 hover:text-white hover:bg-white/5 border border-white/10 transition-colors"
+          title={
+            currentSessionTitle
+              ? `Sessão: "${currentSessionTitle}" (Clique para gerenciar sessões)`
+              : "Gerenciador de Sessões de Debate"
+          }
+        >
+          <FolderOpen className="w-4 h-4 text-cyan-400" />
+          {savedSessionsCount > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-cyan-500 text-slate-950 font-bold text-[9px] flex items-center justify-center font-mono">
+              {savedSessionsCount}
+            </span>
+          )}
+        </button>
+
         {/* Artifacts Button */}
         <button
           onClick={onOpenArtifactsModal}
@@ -171,15 +203,16 @@ export function TopAppBar({
           <BookOpen className="w-4 h-4 text-cyan-400" />
         </button>
 
-        {/* Reset Chat */}
+        {/* Nova Conversa / Novo Debate */}
         <button
-          id="reset-chat-btn"
+          id="btn-top-app-bar-new-chat"
           type="button"
           onClick={onResetChat}
-          className="p-2 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 border border-white/10 transition-colors"
-          title="Iniciar novo debate (limpar histórico)"
+          className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-500/40 text-cyan-200 hover:text-white text-xs font-semibold shadow-sm transition-all"
+          title="Iniciar nova conversa / debate em branco"
         >
-          <RotateCcw className="w-4 h-4" />
+          <Plus className="w-3.5 h-3.5 text-cyan-400" />
+          <span className="hidden sm:inline">Nova Conversa</span>
         </button>
       </div>
     </header>

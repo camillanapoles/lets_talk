@@ -8,7 +8,10 @@ import {
   DebateMode,
   SessionUIMode,
   FormalDebateState,
+  FormalRoundConfig,
   FactCheckIntervention,
+  DebateSession,
+  Artifact,
 } from "./types";
 import { DEBATE_ROLES, GEMINI_MODELS } from "./data/constants";
 import { AndroidStatusBar } from "./components/AndroidStatusBar";
@@ -24,12 +27,75 @@ import { EpistemicGuideModal } from "./components/EpistemicGuideModal";
 import { DebateModeModal } from "./components/DebateModeModal";
 import { ArtifactsModal } from "./components/ArtifactsModal";
 import { VoiceLiveArena } from "./components/VoiceLiveArena";
+import { SessionsManagerModal } from "./components/SessionsManagerModal";
+import {
+  loadSavedSessions,
+  saveDebateSession,
+  deleteDebateSession,
+  renameDebateSession,
+  getActiveSessionId,
+  setActiveSessionId,
+  generateSmartSessionTitle,
+} from "./utils/sessionStorage";
 import { useDialeticaVoice } from "./hooks/useDialeticaVoice";
-import { AlertCircle, Download, X } from "lucide-react";
+import { AlertCircle, Download, X, Plus, Check } from "lucide-react";
+
+const DEFAULT_FORMAL_ROUNDS: FormalRoundConfig[] = [
+  {
+    roundNumber: 1,
+    name: "Abertura & Tese",
+    description: "Exposição da tese e premissas fundamentais",
+    durationSeconds: 90,
+    speaker: "user",
+    phase: "opening",
+  },
+  {
+    roundNumber: 2,
+    name: "Refutação & Objeções",
+    description: "Objeções epistêmicas e contraexemplos",
+    durationSeconds: 90,
+    speaker: "model",
+    phase: "rebuttal",
+  },
+  {
+    roundNumber: 3,
+    name: "Tréplica & Defesa",
+    description: "Defesa dialética e verificação de falácias",
+    durationSeconds: 90,
+    speaker: "user",
+    phase: "counter_rebuttal",
+  },
+  {
+    roundNumber: 4,
+    name: "Síntese & Conclusão",
+    description: "Síntese dialética e balanço probatório",
+    durationSeconds: 60,
+    speaker: "model",
+    phase: "synthesis",
+  },
+];
 
 export default function App() {
-  // Messages state with local persistence
+  // Saved sessions management
+  const [sessions, setSessions] = useState<DebateSession[]>(() => loadSavedSessions());
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(() => getActiveSessionId());
+  const [isSessionsModalOpen, setIsSessionsModalOpen] = useState(false);
+
+  // Determine initial session snapshot if one was active previously
+  const initialSavedSession = (() => {
+    const activeId = getActiveSessionId();
+    if (activeId) {
+      const saved = loadSavedSessions();
+      return saved.find((s) => s.id === activeId) || null;
+    }
+    return null;
+  })();
+
+  // Messages state with local persistence or active session restore
   const [messages, setMessages] = useState<Message[]>(() => {
+    if (initialSavedSession && initialSavedSession.messages) {
+      return initialSavedSession.messages;
+    }
     try {
       const saved = localStorage.getItem("dialetica_chat_history");
       if (saved) {
@@ -41,64 +107,68 @@ export default function App() {
     return [];
   });
 
+  // Artifacts associated with current debate session
+  const [sessionArtifacts, setSessionArtifacts] = useState<Artifact[]>(() => {
+    if (initialSavedSession && initialSavedSession.artifacts) {
+      return initialSavedSession.artifacts;
+    }
+    try {
+      const saved = localStorage.getItem("dialetica_current_artifacts");
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (e) {
+      console.error("Erro ao carregar artefatos locais:", e);
+    }
+    return [];
+  });
+
   // Session UI mode: defaults to Voice-Live ("voice_live") as requested
   const [sessionUIMode, setSessionUIMode] = useState<SessionUIMode>("voice_live");
 
   // Debate Mode: "open" (Discussão Aberta) or "formal" (Debate Formal Regrado)
-  const [debateMode, setDebateMode] = useState<DebateMode>("open");
-
-  // Formal Debate Structured State
-  const [formalState, setFormalState] = useState<FormalDebateState>({
-    isActive: false,
-    topic: "A consciência é um fenômeno exclusivamente físico ou computacional?",
-    currentRoundIndex: 0,
-    timeRemainingSeconds: 90,
-    isTimerRunning: false,
-    rounds: [
-      {
-        roundNumber: 1,
-        name: "Abertura & Tese",
-        description: "Exposição da tese e premissas fundamentais",
-        durationSeconds: 90,
-        speaker: "user",
-        phase: "opening",
-      },
-      {
-        roundNumber: 2,
-        name: "Refutação & Objeções",
-        description: "Objeções epistêmicas e contraexemplos",
-        durationSeconds: 90,
-        speaker: "model",
-        phase: "rebuttal",
-      },
-      {
-        roundNumber: 3,
-        name: "Tréplica & Defesa",
-        description: "Defesa dialética e verificação de falácias",
-        durationSeconds: 90,
-        speaker: "user",
-        phase: "counter_rebuttal",
-      },
-      {
-        roundNumber: 4,
-        name: "Síntese & Conclusão",
-        description: "Síntese dialética e balanço probatório",
-        durationSeconds: 60,
-        speaker: "model",
-        phase: "synthesis",
-      },
-    ],
-    score: {
-      userLogicScore: 8,
-      userEvidenceScore: 7,
-      modelLogicScore: 9,
-      modelEvidenceScore: 9,
-    },
-    concluded: false,
+  const [debateMode, setDebateMode] = useState<DebateMode>(() => {
+    return initialSavedSession?.debateMode || "open";
   });
 
-  const [selectedModel, setSelectedModel] = useState<ModelId>("gemini-3.5-flash");
-  const [selectedRole, setSelectedRole] = useState<DebateRole>(DEBATE_ROLES[4]); // Adaptive Debate default
+  // Formal Debate Structured State
+  const [formalState, setFormalState] = useState<FormalDebateState>(() => {
+    if (initialSavedSession?.formalState) {
+      return initialSavedSession.formalState;
+    }
+    return {
+      isActive: false,
+      topic: "A consciência é um fenômeno exclusivamente físico ou computacional?",
+      currentRoundIndex: 0,
+      timeRemainingSeconds: 90,
+      isTimerRunning: false,
+      rounds: DEFAULT_FORMAL_ROUNDS,
+      score: {
+        userLogicScore: 8,
+        userEvidenceScore: 7,
+        modelLogicScore: 9,
+        modelEvidenceScore: 9,
+      },
+      concluded: false,
+    };
+  });
+
+  const [selectedModel, setSelectedModel] = useState<ModelId>(() => {
+    return initialSavedSession?.selectedModel || "gemini-3.8-flash";
+  });
+
+  const [customTopic, setCustomTopic] = useState<string>(() => {
+    return initialSavedSession?.customTopic || "Livre";
+  });
+
+  const [selectedRole, setSelectedRole] = useState<DebateRole>(() => {
+    if (initialSavedSession?.selectedRole) {
+      const match = DEBATE_ROLES.find((r) => r.id === initialSavedSession.selectedRole?.id);
+      return match || initialSavedSession.selectedRole;
+    }
+    return DEBATE_ROLES[4]; // Adaptive Debate default
+  });
+
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -117,6 +187,17 @@ export default function App() {
     return window.innerWidth >= 1024;
   });
 
+  // In-app New Conversation confirmation modal & toast notifications
+  const [isNewDebateConfirmOpen, setIsNewDebateConfirmOpen] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const showToast = useCallback((msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage((prev) => (prev === msg ? null : prev));
+    }, 3500);
+  }, []);
+
   // PWA install prompt deferred event
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
@@ -125,7 +206,7 @@ export default function App() {
   const messagesRef = useRef<Message[]>(messages);
   messagesRef.current = messages;
 
-  // Sync to local storage
+  // Sync messages to local storage
   useEffect(() => {
     try {
       localStorage.setItem("dialetica_chat_history", JSON.stringify(messages));
@@ -133,6 +214,48 @@ export default function App() {
       console.error("Erro ao persistir mensagens:", e);
     }
   }, [messages]);
+
+  // Sync session artifacts to local storage
+  useEffect(() => {
+    try {
+      localStorage.setItem("dialetica_current_artifacts", JSON.stringify(sessionArtifacts));
+    } catch (e) {
+      console.error("Erro ao persistir artefatos:", e);
+    }
+  }, [sessionArtifacts]);
+
+  // Sync active session ID
+  useEffect(() => {
+    setActiveSessionId(currentSessionId);
+  }, [currentSessionId]);
+
+  // Continuous auto-sync: if current session is a saved session, keep it updated
+  useEffect(() => {
+    if (!currentSessionId || messages.length === 0) return;
+    setSessions((prev) => {
+      const idx = prev.findIndex((s) => s.id === currentSessionId);
+      if (idx === -1) return prev;
+      const existing = prev[idx];
+      const updated: DebateSession = {
+        ...existing,
+        messages,
+        debateMode,
+        formalState,
+        selectedModel,
+        selectedRole,
+        customTopic,
+        artifacts: sessionArtifacts,
+        summarySnippet: messages[0]?.content?.slice(0, 120),
+        updatedAt: Date.now(),
+      };
+      const next = [...prev];
+      next[idx] = updated;
+      try {
+        localStorage.setItem("dialetica_saved_sessions", JSON.stringify(next));
+      } catch (e) {}
+      return next;
+    });
+  }, [messages, debateMode, formalState, selectedModel, selectedRole, customTopic, sessionArtifacts, currentSessionId]);
 
   // Auto-scroll on new messages in text mode
   useEffect(() => {
@@ -264,6 +387,16 @@ export default function App() {
             model: selectedModel,
             roleId: selectedRole.id,
             adaptiveTone: "mirror_user",
+            debateMode,
+            topic: debateMode === "formal" ? formalState.topic : customTopic,
+            formalRound:
+              debateMode === "formal"
+                ? {
+                    roundNumber: formalState.currentRoundIndex + 1,
+                    name: formalState.rounds[formalState.currentRoundIndex]?.name || "Rodada",
+                    phase: formalState.rounds[formalState.currentRoundIndex]?.phase || "Geral",
+                  }
+                : undefined,
           }),
         });
 
@@ -337,6 +470,16 @@ export default function App() {
             model: selectedModel,
             roleId: selectedRole.id,
             adaptiveTone: "mirror_user",
+            debateMode,
+            topic: debateMode === "formal" ? formalState.topic : customTopic,
+            formalRound:
+              debateMode === "formal"
+                ? {
+                    roundNumber: formalState.currentRoundIndex + 1,
+                    name: formalState.rounds[formalState.currentRoundIndex]?.name || "Rodada",
+                    phase: formalState.rounds[formalState.currentRoundIndex]?.phase || "Geral",
+                  }
+                : undefined,
           }),
         });
 
@@ -412,6 +555,7 @@ export default function App() {
     stopListening,
     speakText,
     stopSpeaking,
+    triggerManualSend,
   } = useDialeticaVoice(handleUserVoiceSpoken);
 
   // Toggle Microphone in Voice Arena
@@ -570,16 +714,139 @@ export default function App() {
     handleSendMessage(topic.prompt);
   };
 
-  // Reset/Clear conversation
-  const handleResetChat = () => {
-    if (messages.length === 0) return;
-    if (window.confirm("Deseja reiniciar a arena dialética e limpar o histórico da conversa?")) {
-      stopSpeaking();
-      setMessages([]);
-      setErrorMessage(null);
-      localStorage.removeItem("dialetica_chat_history");
-      setFormalState((prev) => ({ ...prev, isActive: false, currentRoundIndex: 0 }));
+  // Save current debate session (new or update existing)
+  const handleSaveCurrentSession = (customTitle?: string, asNewCopy?: boolean) => {
+    const existing = !asNewCopy && currentSessionId ? sessions.find((s) => s.id === currentSessionId) : null;
+    const title = customTitle?.trim() || existing?.title || generateSmartSessionTitle(messages, formalState, debateMode);
+    const targetId = asNewCopy || !currentSessionId ? `deb-${Date.now()}` : currentSessionId;
+
+    const sessionToSave: DebateSession = {
+      id: targetId,
+      title,
+      createdAt: existing ? existing.createdAt : Date.now(),
+      updatedAt: Date.now(),
+      messages,
+      debateMode,
+      formalState,
+      selectedModel,
+      selectedRole,
+      customTopic,
+      artifacts: sessionArtifacts,
+      summarySnippet: messages[0]?.content?.slice(0, 120),
+    };
+
+    const updated = saveDebateSession(sessionToSave);
+    setSessions(updated);
+    setCurrentSessionId(targetId);
+    setActiveSessionId(targetId);
+  };
+
+  // Load a previously saved debate session
+  const handleLoadSession = (session: DebateSession) => {
+    stopSpeaking();
+    setMessages(session.messages || []);
+    setDebateMode(session.debateMode || "open");
+    setCustomTopic(session.customTopic || "Livre");
+    if (session.formalState) {
+      setFormalState(session.formalState);
     }
+    if (session.selectedModel) {
+      setSelectedModel(session.selectedModel);
+    }
+    if (session.selectedRole) {
+      const matched = DEBATE_ROLES.find((r) => r.id === session.selectedRole?.id) || session.selectedRole;
+      setSelectedRole(matched);
+    }
+    setSessionArtifacts(session.artifacts || []);
+    setCurrentSessionId(session.id);
+    setActiveSessionId(session.id);
+    try {
+      localStorage.setItem("dialetica_chat_history", JSON.stringify(session.messages || []));
+      localStorage.setItem("dialetica_current_artifacts", JSON.stringify(session.artifacts || []));
+    } catch (e) {}
+  };
+
+  // Delete a saved debate session
+  const handleDeleteSession = (sessionId: string) => {
+    const updated = deleteDebateSession(sessionId);
+    setSessions(updated);
+    if (currentSessionId === sessionId) {
+      setCurrentSessionId(null);
+      setActiveSessionId(null);
+    }
+  };
+
+  // Rename a saved debate session
+  const handleRenameSession = (sessionId: string, newTitle: string) => {
+    const updated = renameDebateSession(sessionId, newTitle);
+    setSessions(updated);
+  };
+
+  // Start a completely fresh debate session
+  const handleStartNewDebate = useCallback(() => {
+    stopSpeaking();
+    stopListening();
+    setCurrentSessionId(null);
+    setActiveSessionId(null);
+    setMessages([]);
+    setSessionArtifacts([]);
+    setErrorMessage(null);
+    setDebateMode("open");
+    setCustomTopic("Livre");
+    setFormalState({
+      isActive: false,
+      topic: "A consciência é um fenômeno exclusivamente físico ou computacional?",
+      currentRoundIndex: 0,
+      timeRemainingSeconds: 90,
+      isTimerRunning: false,
+      rounds: DEFAULT_FORMAL_ROUNDS,
+      score: {
+        userLogicScore: 0,
+        userEvidenceScore: 0,
+        modelLogicScore: 0,
+        modelEvidenceScore: 0,
+      },
+      concluded: false,
+    });
+    try {
+      localStorage.removeItem("dialetica_chat_history");
+      localStorage.removeItem("dialetica_current_artifacts");
+      localStorage.removeItem("dialetica_current_session_id");
+    } catch (e) {}
+  }, [stopSpeaking, stopListening]);
+
+  // Request new debate safely (non-blocking in-app modal if messages exist)
+  const handleRequestNewDebate = useCallback(() => {
+    if (messages.length === 0) {
+      handleStartNewDebate();
+      showToast("Nova conversa pronta para iniciar!");
+      return;
+    }
+    setIsNewDebateConfirmOpen(true);
+  }, [messages.length, handleStartNewDebate, showToast]);
+
+  const handleConfirmNewDebateWithSave = useCallback(() => {
+    handleSaveCurrentSession();
+    handleStartNewDebate();
+    setIsNewDebateConfirmOpen(false);
+    showToast("Nova conversa iniciada. Debate anterior salvo em Sessões.");
+  }, [handleSaveCurrentSession, handleStartNewDebate, showToast]);
+
+  const handleConfirmNewDebateWithoutSave = useCallback(() => {
+    handleStartNewDebate();
+    setIsNewDebateConfirmOpen(false);
+    showToast("Nova conversa limpa iniciada.");
+  }, [handleStartNewDebate, showToast]);
+
+  // Add an artifact generated in the current session
+  const handleAddArtifact = (artifact: Artifact) => {
+    setSessionArtifacts((prev) => {
+      const updated = [...prev.filter((a) => a.id !== artifact.id), artifact];
+      try {
+        localStorage.setItem("dialetica_current_artifacts", JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
   };
 
   // Open Image Studio with prefilled prompt
@@ -643,17 +910,21 @@ export default function App() {
           selectedModel={selectedModel}
           debateMode={debateMode}
           sessionUIMode={sessionUIMode}
+          savedSessionsCount={sessions.length}
+          currentSessionTitle={sessions.find((s) => s.id === currentSessionId)?.title}
           onOpenRoleSelector={() => setIsRoleModalOpen(true)}
           onOpenModelSelector={() => setIsModelModalOpen(true)}
           onOpenEpistemicGuide={() => setIsEpistemicGuideOpen(true)}
           onOpenDebateModeModal={() => setIsDebateModeModalOpen(true)}
           onOpenArtifactsModal={() => setIsArtifactsModalOpen(true)}
+          onOpenSessionsModal={() => setIsSessionsModalOpen(true)}
           onToggleSessionUIMode={() =>
             setSessionUIMode((prev) => (prev === "voice_live" ? "text_chat" : "voice_live"))
           }
-          onResetChat={handleResetChat}
+          onResetChat={handleRequestNewDebate}
           isAndroidFrameMode={isAndroidFrameMode}
           onToggleAndroidFrame={() => setIsAndroidFrameMode(!isAndroidFrameMode)}
+          onShareNotice={(msg) => showToast(msg)}
         />
 
         {/* Global Error Notice */}
@@ -679,6 +950,11 @@ export default function App() {
             isSpeaking={voiceState.isSpeaking}
             activeSpeaker={voiceState.activeSpeaker}
             liveTranscript={voiceState.liveTranscript}
+            micVolume={voiceState.micVolume}
+            vadPhase={voiceState.vadPhase}
+            silenceCountdownMs={voiceState.silenceCountdownMs}
+            interruptedCount={voiceState.interruptedCount}
+            customTopic={customTopic}
             messages={messages}
             selectedRole={selectedRole}
             selectedModel={selectedModel}
@@ -690,9 +966,13 @@ export default function App() {
             onTriggerFactCheck={handleTriggerFactCheck}
             onOpenFormalDebateModal={() => setIsDebateModeModalOpen(true)}
             onOpenArtifactsModal={() => setIsArtifactsModalOpen(true)}
+            onOpenSessionsModal={() => setIsSessionsModalOpen(true)}
+            onStartNewDebate={handleRequestNewDebate}
             onAdvanceFormalRound={handleAdvanceFormalRound}
             onPlayAudioSnippet={(txt, role, b64) => speakText(txt, role, b64)}
             onRequestEvidence={(prompt) => handleSendMessage(prompt)}
+            onSetCustomTopic={(newTopic) => setCustomTopic(newTopic)}
+            onTriggerManualSend={triggerManualSend}
           />
         ) : (
           /* Text Chat Classic Mode */
@@ -784,6 +1064,29 @@ export default function App() {
         isOpen={isArtifactsModalOpen}
         onClose={() => setIsArtifactsModalOpen(false)}
         messages={messages}
+        sessionArtifacts={sessionArtifacts}
+        onSaveArtifact={handleAddArtifact}
+        customTopic={customTopic}
+      />
+
+      {/* Debate Sessions Manager Modal (Save, Load, Export/Import, Manage History) */}
+      <SessionsManagerModal
+        isOpen={isSessionsModalOpen}
+        onClose={() => setIsSessionsModalOpen(false)}
+        sessions={sessions}
+        currentSessionId={currentSessionId}
+        currentMessages={messages}
+        currentDebateMode={debateMode}
+        currentFormalState={formalState}
+        currentModel={selectedModel}
+        currentRole={selectedRole}
+        currentArtifacts={sessionArtifacts}
+        onSaveCurrentSession={handleSaveCurrentSession}
+        onLoadSession={handleLoadSession}
+        onDeleteSession={handleDeleteSession}
+        onRenameSession={handleRenameSession}
+        onStartNewDebate={handleStartNewDebate}
+        onImportSessionsSuccess={() => setSessions(loadSavedSessions())}
       />
 
       {/* Image Studio Modal (gemini-3-pro-image-preview with 1K, 2K, 4K affordance) */}
@@ -818,6 +1121,66 @@ export default function App() {
                 gemini-3-pro-image-preview
               </span>
               <p className="text-xs text-slate-300 line-clamp-2">{zoomedImage.prompt}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Non-intrusive floating toast notification */}
+      {toastMessage && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-70 bg-[#0c1427]/95 border border-cyan-500/50 text-cyan-200 px-4 py-2.5 rounded-full shadow-2xl backdrop-blur-md text-xs font-medium flex items-center gap-2 animate-in fade-in slide-in-from-top-3 duration-200 pointer-events-none"
+        >
+          <Check className="w-4 h-4 text-cyan-400 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
+      {/* In-app New Conversation Confirmation Dialog (iframe safe) */}
+      {isNewDebateConfirmOpen && (
+        <div className="fixed inset-0 z-65 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-[#0b1020] border border-cyan-500/30 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center shrink-0">
+                <Plus className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Iniciar Nova Conversa?</h3>
+                <p className="text-xs text-slate-400">
+                  Você já possui turnos de debate em andamento nesta sessão.
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed bg-white/[0.03] p-3 rounded-xl border border-white/5">
+              Deseja arquivar e salvar este debate no seu histórico de <strong>Sessões</strong> para consultá-lo quando quiser, ou iniciar uma tela completamente limpa?
+            </p>
+
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsNewDebateConfirmOpen(false)}
+                className="px-3.5 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-white hover:bg-white/5 transition-colors text-center"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmNewDebateWithoutSave}
+                className="px-3.5 py-2 rounded-xl text-xs font-medium text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition-colors text-center"
+              >
+                Iniciar Sem Salvar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmNewDebateWithSave}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-md shadow-cyan-950 transition-all flex items-center justify-center gap-1.5"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Salvar &amp; Iniciar Nova</span>
+              </button>
             </div>
           </div>
         </div>

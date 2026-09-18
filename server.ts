@@ -65,7 +65,8 @@ function buildSystemInstruction(
   roleId?: string,
   adaptiveTone?: string,
   debateMode?: string,
-  formalRound?: { roundNumber: number; name: string; phase: string }
+  formalRound?: { roundNumber: number; name: string; phase: string },
+  customTopic?: string
 ): string {
   const baseInstruction = `Você é o "Dialética" (Dialektik), um parceiro de debate intelectual avançado, de nível científico, epistemológico e filosófico profundo.
 Seu propósito primordial é debater temas complexos com absoluto rigor conceitual, embasamento empírico factual e profundidade filosófica.
@@ -87,16 +88,17 @@ DIRETRIZES FUNDAMENTAIS:
      * Se o usuário usar linguagem acadêmica, formal, técnica ou poética, eleve seu vocabulário e estilo para corresponder perfeitamente a esse registro.
      * Mantenha sempre o respeito intelectual, a provocação socrática benéfica e o foco na busca compartilhada da verdade.
 
-4. DIRETRIZ PARA CONVERSAÇÃO AUDÍVEL (VOZ COMO PADRÃO):
-   - Como este é primariamente um aplicativo de debate por voz, seja claro, com cadência natural para fala fluida, evitando blocos impenetráveis de texto ou listas excessivamente burocráticas quando falado. Mantenha os argumentos potentes e objetivos.
+4. DIRETRIZ PARA CONVERSAÇÃO AUDÍVEL NATURAL (VOZ COMO PADRÃO):
+   - Como este é primariamente um aplicativo de debate por voz em tempo real, responda de forma envolvente, concisa e potente, com cadência de fala humana e ritmo orgânico.
+   - Evite respostas desnecessariamente longas que monopolizem o canal de áudio. Estimule a troca de turnos ágil, provocando a réplica do usuário.
 
 5. FORMATO ESTRUTURADO DE RESPOSTA:
-   Organize suas respostas com clareza visual rica em Markdown (títulos, listas, destaques e citações conceituais):
+   Organize suas respostas com clareza visual rica em Markdown:
    - **Tese Epistêmica & Resposta Direta**: Posição clara frente à pergunta.
    - **Fundamentação Factual & Evidências**: Mecanismos físicos, estudos, modelos matemáticos ou biológicos relevantes.
    - **Dimensão Filosófica & Dialética**: Implicações ontológicas, éticas ou conceituais.
    - **Antítese / Objeções Fortes (Steelmanning)**: Limitações, contraexemplos e a melhor crítica possível.
-   - **Provocação Socrática / Síntese**: Uma questão aberta instigante para aprofundar o debate no próximo turno.`;
+   - **Provocação Socrática**: Uma questão aberta e instigante para o próximo turno do interlocutor.`;
 
   let modeInstruction = "";
   if (debateMode === "formal") {
@@ -113,7 +115,17 @@ ${
 }`;
   } else {
     modeInstruction = `\n\nMODO DE DISCUSSÃO ABERTA ATIVO:
-Exploração dialética livre e profunda, sem restrições temporais de rodada, mantendo o foco inegociável em fatos, ciência e raciocínio ontológico.`;
+Exploração dialética livre e orgânica, sem restrições de tempo, mantendo foco constante em fatos verificáveis, ciência e solidez conceitual.`;
+  }
+
+  let topicInstruction = "";
+  if (customTopic && customTopic.trim() && customTopic.trim().toLowerCase() !== "livre") {
+    topicInstruction = `\n\nTÓPICO CENTRAL DEFINIDO DO DEBATE:
+"${customTopic.trim()}"
+Concentre seus argumentos e objeções prioritariamente em torno deste tema e suas ramificações diretas.`;
+  } else {
+    topicInstruction = `\n\nTÓPICO DE DEBATE: LIVRE (A CRITÉRIO DO USUÁRIO)
+O tema está totalmente livre e aberto às instruções e provocações do usuário. Qualquer assunto trazido pelo usuário deve ser acolhido e aprofundado com máximo rigor científico e filosófico.`;
   }
 
   const roleCustomizations: Record<string, string> = {
@@ -129,7 +141,12 @@ Enfoque no "Hard Problem" da consciência (Chalmers), hipóteses neurobiológica
 Equilibre ciência natural e filosofia moral, adaptando-se com máxima sensibilidade e agilidade à vibração e tom da conversa.`,
   };
 
-  return baseInstruction + (roleCustomizations[roleId || "adaptive_debate"] || roleCustomizations.adaptive_debate);
+  return (
+    baseInstruction +
+    modeInstruction +
+    topicInstruction +
+    (roleCustomizations[roleId || "adaptive_debate"] || roleCustomizations.adaptive_debate)
+  );
 }
 
 // Health check
@@ -140,7 +157,7 @@ app.get("/api/health", (_req, res) => {
 // Chat endpoint (multi-turn conversation)
 app.post("/api/chat", async (req, res) => {
   try {
-    const { messages, model = "gemini-3.5-flash", roleId, adaptiveTone, debateMode, formalRound } = req.body;
+    const { messages, model = "gemini-3.5-flash", roleId, adaptiveTone, debateMode, formalRound, topic } = req.body;
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: "O histórico de mensagens é obrigatório." });
@@ -148,13 +165,19 @@ app.post("/api/chat", async (req, res) => {
 
     // Supported models per prompt specifications:
     // - gemini-3.1-pro-preview (complex tasks)
-    // - gemini-3.5-flash (general tasks)
+    // - gemini-3.8-flash (general tasks & basic text)
     // - gemini-3.1-flash-lite (fast tasks)
-    const validModels = ["gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.1-flash-lite"];
-    const targetModel = validModels.includes(model) ? model : "gemini-3.5-flash";
+    const MODEL_ALIASES: Record<string, string> = {
+      "gemini-3.1-pro-preview": "gemini-3.1-pro-preview",
+      "gemini-3.5-flash": "gemini-3.8-flash",
+      "gemini-3.8-flash": "gemini-3.8-flash",
+      "gemini-flash-latest": "gemini-3.8-flash",
+      "gemini-3.1-flash-lite": "gemini-3.1-flash-lite",
+    };
+    const targetModel = MODEL_ALIASES[model] || "gemini-3.8-flash";
 
     const ai = getGeminiClient();
-    const systemInstruction = buildSystemInstruction(roleId, adaptiveTone, debateMode, formalRound);
+    const systemInstruction = buildSystemInstruction(roleId, adaptiveTone, debateMode, formalRound, topic);
 
     // Transform messages to Gemini format
     const contents = messages.map((msg: { role: string; content: string }) => ({
@@ -189,17 +212,23 @@ app.post("/api/chat", async (req, res) => {
 // Streaming Chat endpoint (SSE)
 app.post("/api/chat/stream", async (req, res) => {
   try {
-    const { messages, model = "gemini-3.5-flash", roleId, adaptiveTone, debateMode, formalRound } = req.body;
+    const { messages, model = "gemini-3.5-flash", roleId, adaptiveTone, debateMode, formalRound, topic } = req.body;
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: "O histórico de mensagens é obrigatório." });
     }
 
-    const validModels = ["gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.1-flash-lite"];
-    const targetModel = validModels.includes(model) ? model : "gemini-3.5-flash";
+    const MODEL_ALIASES: Record<string, string> = {
+      "gemini-3.1-pro-preview": "gemini-3.1-pro-preview",
+      "gemini-3.5-flash": "gemini-3.8-flash",
+      "gemini-3.8-flash": "gemini-3.8-flash",
+      "gemini-flash-latest": "gemini-3.8-flash",
+      "gemini-3.1-flash-lite": "gemini-3.1-flash-lite",
+    };
+    const targetModel = MODEL_ALIASES[model] || "gemini-3.8-flash";
 
     const ai = getGeminiClient();
-    const systemInstruction = buildSystemInstruction(roleId, adaptiveTone, debateMode, formalRound);
+    const systemInstruction = buildSystemInstruction(roleId, adaptiveTone, debateMode, formalRound, topic);
 
     const contents = messages.map((msg: { role: string; content: string }) => ({
       role: msg.role === "assistant" || msg.role === "model" ? "model" : "user",
@@ -303,7 +332,7 @@ Responda ESTRITAMENTE em JSON com a seguinte estrutura:
 }`;
 
     const factCheckResponse = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-3.8-flash",
       contents: [{ parts: [{ text: factCheckerPrompt }] }],
       config: {
         responseMimeType: "application/json",
@@ -426,23 +455,30 @@ app.post("/api/tts", async (req, res) => {
 // ==========================================
 app.post("/api/artifacts/generate", async (req, res) => {
   try {
-    const { messages, type = "summary", customPrompt } = req.body;
+    const { messages = [], type = "summary", customPrompt, topic } = req.body;
 
-    if (!messages || !Array.isArray(messages) || messages.length === 0) {
-      return res.status(400).json({ error: "Histórico da discussão necessário para gerar artefato." });
+    const hasMessages = Array.isArray(messages) && messages.length > 0;
+    const hasTopic = typeof topic === "string" && topic.trim() !== "" && topic !== "Livre";
+
+    if (!hasMessages && !customPrompt && !hasTopic) {
+      return res.status(400).json({
+        error: "Histórico da discussão ou um tema específico é necessário para sintetizar o artefato epistêmico.",
+      });
     }
 
     const ai = getGeminiClient();
-    const historyText = messages
-      .map((m: any) => `[${m.role === "user" ? "USUÁRIO" : "DIALÉTICA"}]: ${m.content}`)
-      .join("\n\n");
+    const historyText = hasMessages
+      ? messages
+          .map((m: any) => `[${m.role === "user" ? "USUÁRIO" : "DIALÉTICA"}]: ${m.content}`)
+          .join("\n\n")
+      : `TEMA PROPOSTO PARA EXPLORAÇÃO CONCEITUAL: "${topic || "Epistemologia & Rigor Dialético"}"`;
 
     let promptInstruction = "";
     if (type === "summary") {
-      promptInstruction = `Crie uma "SÚMULA EPISTÊMICA DO DEBATE", estruturando com elegância:
-1. Objeto Central da Disputa Dialética
-2. Premissas e Teses Defendidas pelo Usuário
-3. Antíteses e Objeções Levantadas pelo Dialética
+      promptInstruction = `Crie uma "SÚMULA EPISTÊMICA", estruturando com rigor e clareza analítica:
+1. Objeto Central da Disputa Dialética ou Tese Central
+2. Premissas e Axiomas Fundamentais
+3. Antíteses, Objeções e Contraexemplos
 4. Pontos de Consenso Estabelecidos
 5. Divergências em Aberto e Falso Consenso
 6. Veredito de Rigor Provisório`;
@@ -452,7 +488,7 @@ app.post("/api/artifacts/generate", async (req, res) => {
 - Premissas Maiores e Menores
 - Conclusões Dedutivas vs Indutivas
 - Objeções e Contraexemplos
-- Falácias ou Vieses Mapeados no Diálogo`;
+- Falácias ou Vieses Mapeados na Análise`;
     } else if (type === "fact_dossier") {
       promptInstruction = `Crie um "DOSSIÊ BIBLIOGRÁFICO & EVIDÊNCIAS CIENTÍFICAS" reunindo:
 - Fatos e Constantes Físicas ou Biológicas citadas
@@ -463,21 +499,41 @@ app.post("/api/artifacts/generate", async (req, res) => {
       promptInstruction = customPrompt || "Sintetize os avanços conceituais deste debate em um artefato analítico rico.";
     }
 
-    const artifactResponse = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: [
-        {
-          parts: [
-            {
-              text: `HISTÓRICO INTEGRAL DO DEBATE:\n${historyText}\n\nSOLICITAÇÃO DE ARTEFATO:\n${promptInstruction}`,
-            },
-          ],
+    let artifactResponse: any;
+    try {
+      artifactResponse = await ai.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: [
+          {
+            parts: [
+              {
+                text: `CONTEXTO / HISTÓRICO:\n${historyText}\n\nSOLICITAÇÃO DE ARTEFATO:\n${promptInstruction}`,
+              },
+            ],
+          },
+        ],
+        config: {
+          temperature: 0.4,
         },
-      ],
-      config: {
-        temperature: 0.4,
-      },
-    });
+      });
+    } catch (primaryError: any) {
+      console.warn("Spike no modelo primário em /api/artifacts/generate, acionando fallback gemini-3.1-flash-lite:", primaryError?.message);
+      artifactResponse = await ai.models.generateContent({
+        model: "gemini-3.1-flash-lite",
+        contents: [
+          {
+            parts: [
+              {
+                text: `CONTEXTO / HISTÓRICO:\n${historyText}\n\nSOLICITAÇÃO DE ARTEFATO:\n${promptInstruction}`,
+              },
+            ],
+          },
+        ],
+        config: {
+          temperature: 0.4,
+        },
+      });
+    }
 
     const content = artifactResponse.text || "Conteúdo do artefato não pôde ser sintetizado.";
     const titleMap: Record<string, string> = {
@@ -491,7 +547,9 @@ app.post("/api/artifacts/generate", async (req, res) => {
       id: `art-${Date.now()}`,
       type,
       title: titleMap[type] || "Artefato Dialético",
-      description: `Gerado a partir de ${messages.length} turnos de discussão intelectual.`,
+      description: hasMessages
+        ? `Gerado a partir de ${messages.length} turnos de discussão intelectual.`
+        : `Dossiê preliminar gerado para o tema: ${topic || "Conceitual"}.`,
       content,
       timestamp: Date.now(),
     });
@@ -535,7 +593,7 @@ Responda em JSON:
 }`;
 
     const judgeResponse = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-3.8-flash",
       contents: [{ parts: [{ text: judgePrompt }] }],
       config: {
         responseMimeType: "application/json",

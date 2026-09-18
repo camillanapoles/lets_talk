@@ -1,4 +1,4 @@
-export type ModelId = "gemini-3.1-pro-preview" | "gemini-3.5-flash" | "gemini-3.1-flash-lite";
+export type ModelId = "gemini-3.1-pro-preview" | "gemini-3.8-flash" | "gemini-3.5-flash" | "gemini-3.1-flash-lite";
 
 export type ImageSize = "1K" | "2K" | "4K";
 
@@ -70,6 +70,21 @@ export interface Artifact {
   content: string;
   timestamp: number;
   data?: any;
+}
+
+export interface DebateSession {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: Message[];
+  debateMode: DebateMode;
+  formalState: FormalDebateState;
+  selectedModel: ModelId;
+  selectedRole: DebateRole;
+  artifacts: Artifact[];
+  summarySnippet?: string;
+  customTopic?: string;
 }
 
 export interface ModelOption {

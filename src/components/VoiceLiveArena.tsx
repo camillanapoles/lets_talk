@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Message, FormalDebateState, DebateRole, ModelId, FactCheckIntervention } from "../types";
+import { VADPhase } from "../hooks/useDialeticaVoice";
 import { FactCheckCard } from "./FactCheckCard";
 import {
   Mic,
@@ -8,12 +9,19 @@ import {
   MessageSquareText,
   Scale,
   Sparkles,
-  Search,
   FileText,
   Volume2,
   Clock,
   ArrowRight,
   ShieldAlert,
+  FolderOpen,
+  SendHorizontal,
+  Edit3,
+  Check,
+  X,
+  Radio,
+  Zap,
+  Plus,
 } from "lucide-react";
 
 interface VoiceLiveArenaProps {
@@ -21,6 +29,11 @@ interface VoiceLiveArenaProps {
   isSpeaking: boolean;
   activeSpeaker: "idle" | "user" | "dialetica" | "arbitro";
   liveTranscript: string;
+  micVolume?: number;
+  vadPhase?: VADPhase;
+  silenceCountdownMs?: number;
+  interruptedCount?: number;
+  customTopic?: string;
   messages: Message[];
   selectedRole: DebateRole;
   selectedModel: ModelId;
@@ -32,9 +45,13 @@ interface VoiceLiveArenaProps {
   onTriggerFactCheck: () => void;
   onOpenFormalDebateModal: () => void;
   onOpenArtifactsModal: () => void;
+  onOpenSessionsModal?: () => void;
+  onStartNewDebate?: () => void;
   onAdvanceFormalRound: () => void;
   onPlayAudioSnippet?: (text: string, speakerRole: "arbitro" | "dialetica", base64?: string) => void;
   onRequestEvidence?: (prompt: string) => void;
+  onSetCustomTopic?: (newTopic: string) => void;
+  onTriggerManualSend?: () => void;
 }
 
 export function VoiceLiveArena({
@@ -42,6 +59,11 @@ export function VoiceLiveArena({
   isSpeaking,
   activeSpeaker,
   liveTranscript,
+  micVolume = 0,
+  vadPhase = "idle",
+  silenceCountdownMs = 0,
+  interruptedCount = 0,
+  customTopic = "Livre",
   messages,
   selectedRole,
   selectedModel,
@@ -53,16 +75,37 @@ export function VoiceLiveArena({
   onTriggerFactCheck,
   onOpenFormalDebateModal,
   onOpenArtifactsModal,
+  onOpenSessionsModal,
+  onStartNewDebate,
   onAdvanceFormalRound,
   onPlayAudioSnippet,
   onRequestEvidence,
+  onSetCustomTopic,
+  onTriggerManualSend,
 }: VoiceLiveArenaProps) {
   const transcriptEndRef = useRef<HTMLDivElement>(null);
+  const [isEditingTopic, setIsEditingTopic] = useState(false);
+  const [topicInput, setTopicInput] = useState(customTopic === "Livre" ? "" : customTopic);
 
   // Auto scroll transcript to latest
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, liveTranscript, activeSpeaker]);
+
+  // Keep topic input in sync if prop changes
+  useEffect(() => {
+    if (!isEditingTopic) {
+      setTopicInput(customTopic === "Livre" ? "" : customTopic);
+    }
+  }, [customTopic, isEditingTopic]);
+
+  const handleSaveTopic = () => {
+    const trimmed = topicInput.trim();
+    if (onSetCustomTopic) {
+      onSetCustomTopic(trimmed || "Livre");
+    }
+    setIsEditingTopic(false);
+  };
 
   // Find latest model message and latest fact-check intervention
   const lastModelMsg = [...messages].reverse().find((m) => m.role === "model");
@@ -77,7 +120,7 @@ export function VoiceLiveArena({
   });
   const latestFactCheck = allFactChecks[allFactChecks.length - 1];
 
-  // Visualizer aura color based on active speaker
+  // Visualizer aura color based on active speaker & VAD phase
   const getVisualizerStyle = () => {
     if (activeSpeaker === "arbitro") {
       return {
@@ -85,27 +128,41 @@ export function VoiceLiveArena({
         border: "border-indigo-400/50",
         ring: "ring-indigo-400/40",
         orbGradient: "from-indigo-600 via-purple-600 to-amber-500",
-        statusText: "Árbitro Epistêmico Intervindo com Voz Distinta",
+        statusText: "Árbitro Epistêmico Intervindo",
+        subStatus: "Voz distinta do validador factual",
         speakerIcon: <Scale className="w-4 h-4 text-indigo-400" />,
       };
     }
-    if (activeSpeaker === "dialetica") {
+    if (activeSpeaker === "dialetica" || isSpeaking) {
       return {
         glow: "from-cyan-500/40 via-blue-600/30 to-purple-600/20",
         border: "border-cyan-400/50",
         ring: "ring-cyan-400/40",
         orbGradient: "from-cyan-500 via-blue-600 to-purple-600",
-        statusText: "Dialética Discursando (Voz Epistêmica)",
+        statusText: "Dialética Discursando",
+        subStatus: "Fale a qualquer momento para interromper",
         speakerIcon: <Volume2 className="w-4 h-4 text-cyan-400" />,
       };
     }
     if (activeSpeaker === "user" || isListening) {
+      if (vadPhase === "pause_detected") {
+        return {
+          glow: "from-teal-500/50 via-emerald-600/30 to-cyan-500/30",
+          border: "border-teal-400/60",
+          ring: "ring-teal-400/50",
+          orbGradient: "from-teal-500 via-emerald-500 to-cyan-600",
+          statusText: "Pausa Detectada",
+          subStatus: `Disparando resposta em ${(silenceCountdownMs / 1000).toFixed(1)}s`,
+          speakerIcon: <Zap className="w-4 h-4 text-teal-300 animate-pulse" />,
+        };
+      }
       return {
         glow: "from-emerald-500/40 via-cyan-600/30 to-blue-500/20",
         border: "border-emerald-400/50",
         ring: "ring-emerald-400/40",
         orbGradient: "from-emerald-500 via-teal-500 to-cyan-600",
-        statusText: "Ouvindo você...",
+        statusText: liveTranscript ? "Ouvindo sua fala..." : "Ouvindo você...",
+        subStatus: "Fale com naturalidade • Pausa ou pergunta dispara resposta",
         speakerIcon: <Mic className="w-4 h-4 text-emerald-400" />,
       };
     }
@@ -114,12 +171,17 @@ export function VoiceLiveArena({
       border: "border-slate-700/40",
       ring: "ring-slate-700/30",
       orbGradient: "from-slate-700 via-slate-800 to-slate-900",
-      statusText: "Toque no microfone para debater",
+      statusText: "Canal de Voz em Espera",
+      subStatus: "Toque no microfone para debater por voz",
       speakerIcon: <Sparkles className="w-4 h-4 text-slate-400" />,
     };
   };
 
   const visualStyle = getVisualizerStyle();
+
+  // Dynamic dynamic scale for orb based on live microphone energy
+  const orbScaleMultiplier =
+    activeSpeaker === "user" || isListening ? 1 + Math.min(0.35, micVolume * 0.45) : 1;
 
   return (
     <div
@@ -131,27 +193,109 @@ export function VoiceLiveArena({
         className={`absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[340px] h-[340px] sm:w-[480px] sm:h-[480px] bg-gradient-to-tr ${visualStyle.glow} rounded-full blur-[90px] opacity-60 pointer-events-none transition-all duration-700`}
       />
 
-      {/* Top Status & Debate Mode Info */}
-      <div className="relative z-10 w-full flex items-center justify-between gap-2">
-        {/* Debate Mode Chip */}
-        <button
-          onClick={onOpenFormalDebateModal}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold backdrop-blur-md transition-all ${
-            debateMode === "formal"
-              ? "bg-amber-950/40 border-amber-500/40 text-amber-300 shadow-md shadow-amber-950/30"
-              : "bg-cyan-950/30 border-cyan-500/30 text-cyan-300"
-          }`}
-          title="Alternar entre Debate Formal Regrado e Discussão Aberta"
-        >
-          <Scale className="w-3.5 h-3.5" />
-          <span>{debateMode === "formal" ? "Debate Formal Regrado" : "Discussão Aberta"}</span>
-        </button>
+      {/* Top Status, Debate Mode & Topic Configuration Bar */}
+      <div className="relative z-10 w-full flex flex-col gap-2">
+        <div className="w-full flex items-center justify-between gap-2">
+          {/* Debate Mode Chip */}
+          <button
+            onClick={onOpenFormalDebateModal}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold backdrop-blur-md transition-all ${
+              debateMode === "formal"
+                ? "bg-amber-950/40 border-amber-500/40 text-amber-300 shadow-md shadow-amber-950/30"
+                : "bg-cyan-950/30 border-cyan-500/30 text-cyan-300"
+            }`}
+            title="Alternar entre Debate Formal Regrado e Discussão Aberta"
+          >
+            <Scale className="w-3.5 h-3.5" />
+            <span>{debateMode === "formal" ? "Debate Formal Regrado" : "Discussão Aberta"}</span>
+          </button>
 
-        {/* Persona Chip */}
-        <div className="flex items-center gap-1 text-[11px] text-slate-400 font-medium">
-          <span className="w-2 h-2 rounded-full bg-cyan-400"></span>
-          <span className="truncate max-w-[130px]">{selectedRole.shortTitle}</span>
+          {/* Persona Chip & New Debate Button */}
+          <div className="flex items-center gap-1.5">
+            {onStartNewDebate && (
+              <button
+                id="voice-arena-new-debate-top-btn"
+                onClick={onStartNewDebate}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-500/40 text-cyan-200 hover:text-white text-xs font-semibold transition-all shadow-sm"
+                title="Iniciar nova conversa / debate em branco"
+              >
+                <Plus className="w-3 h-3 text-cyan-400" />
+                <span>Novo</span>
+              </button>
+            )}
+
+            <div className="flex items-center gap-1.5 text-[11px] text-slate-400 font-medium bg-white/[0.03] px-2.5 py-1 rounded-full border border-white/5">
+              <span className="w-2 h-2 rounded-full bg-cyan-400"></span>
+              <span className="truncate max-w-[120px]">{selectedRole.shortTitle}</span>
+            </div>
+          </div>
         </div>
+
+        {/* Dynamic Topic Bar (Configurable or Free) */}
+        {debateMode === "open" && (
+          <div className="w-full flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-white/[0.03] border border-white/10 text-xs backdrop-blur-md">
+            <div className="flex items-center gap-2 overflow-hidden flex-1">
+              <span className="text-[10px] font-mono text-cyan-400 uppercase tracking-wider shrink-0">
+                Tema:
+              </span>
+              {isEditingTopic ? (
+                <div className="flex items-center gap-1.5 flex-1">
+                  <input
+                    type="text"
+                    value={topicInput}
+                    onChange={(e) => setTopicInput(e.target.value)}
+                    placeholder="Digite o tema (ou deixe vazio para Livre)..."
+                    className="flex-1 bg-black/50 border border-cyan-500/50 rounded-lg px-2 py-0.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-400"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleSaveTopic();
+                      if (e.key === "Escape") setIsEditingTopic(false);
+                    }}
+                  />
+                  <button
+                    onClick={handleSaveTopic}
+                    className="p-1 rounded-md bg-cyan-500 text-slate-950 hover:bg-cyan-400"
+                    title="Salvar tema"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setIsEditingTopic(false)}
+                    className="p-1 rounded-md text-slate-400 hover:text-white"
+                    title="Cancelar"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <div
+                  className="truncate text-slate-300 font-medium cursor-pointer hover:text-cyan-200 transition-colors"
+                  onClick={() => setIsEditingTopic(true)}
+                  title="Clique para definir ou alterar o tema do debate"
+                >
+                  {customTopic && customTopic !== "Livre" ? (
+                    <span className="text-cyan-200 font-semibold">"{customTopic}"</span>
+                  ) : (
+                    <span className="text-slate-400 italic">
+                      Livre (a critério das suas instruções)
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {!isEditingTopic && (
+              <button
+                onClick={() => setIsEditingTopic(true)}
+                className="flex items-center gap-1 text-[11px] text-cyan-400 hover:text-cyan-300 font-medium shrink-0 ml-1"
+                title="Definir tema específico"
+              >
+                <Edit3 className="w-3 h-3" />
+                <span className="hidden sm:inline">Definir</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Formal Debate Progress Bar (if in formal mode) */}
@@ -204,44 +348,58 @@ export function VoiceLiveArena({
         </div>
       )}
 
-      {/* Center Dialectic Fluid Wave Orb (Gemini Live Aesthetic) */}
-      <div className="relative z-10 flex-1 flex flex-col items-center justify-center my-4">
-        {/* Pulsating Fluid Dialectic Sphere */}
+      {/* Center Fluid Conversational Wave Orb */}
+      <div className="relative z-10 flex-1 flex flex-col items-center justify-center my-3">
         <div className="relative flex items-center justify-center">
-          {/* Animated Ripples */}
+          {/* Animated Ripples based on active speaker and mic volume */}
           {(isListening || isSpeaking) && (
             <>
               <div
-                className={`absolute w-44 h-44 sm:w-56 sm:h-56 rounded-full border ${visualStyle.border} animate-ping opacity-25`}
+                className={`absolute rounded-full border ${visualStyle.border} transition-all duration-300 ${
+                  micVolume > 0.08 ? "scale-125 opacity-40 animate-ping" : "scale-100 opacity-20"
+                }`}
+                style={{
+                  width: `${180 + micVolume * 70}px`,
+                  height: `${180 + micVolume * 70}px`,
+                }}
               />
               <div
-                className={`absolute w-36 h-36 sm:w-48 sm:h-48 rounded-full border ${visualStyle.border} animate-pulse opacity-40`}
+                className={`absolute w-36 h-36 sm:w-48 sm:h-48 rounded-full border ${visualStyle.border} animate-pulse opacity-30`}
               />
             </>
           )}
 
           {/* Central Fluid Glowing Orb */}
           <div
-            className={`w-28 h-28 sm:w-36 sm:h-36 rounded-full bg-gradient-to-tr ${visualStyle.orbGradient} p-1 shadow-[0_0_50px_rgba(6,182,212,0.4)] flex items-center justify-center transition-all duration-500`}
+            className={`w-28 h-28 sm:w-36 sm:h-36 rounded-full bg-gradient-to-tr ${visualStyle.orbGradient} p-1 shadow-[0_0_50px_rgba(6,182,212,0.4)] flex items-center justify-center transition-transform duration-150`}
+            style={{
+              transform: `scale(${orbScaleMultiplier})`,
+            }}
           >
             <div className="w-full h-full rounded-full bg-[#090e1a]/85 backdrop-blur-sm flex flex-col items-center justify-center gap-1 text-white">
-              {/* Animated Equalizer Wave Bars */}
+              {/* Animated Equalizer Wave Bars reacting dynamically to speech */}
               <div className="flex items-end gap-1 h-7">
-                {[0.4, 0.9, 0.6, 1, 0.7, 0.5].map((scale, i) => (
-                  <span
-                    key={i}
-                    className={`w-1 rounded-full bg-cyan-400 transition-all duration-150 ${
-                      isSpeaking || isListening ? "animate-pulse" : "opacity-30"
-                    }`}
-                    style={{
-                      height:
-                        isSpeaking || isListening
-                          ? `${Math.max(8, scale * 26)}px`
-                          : "6px",
-                      animationDelay: `${i * 120}ms`,
-                    }}
-                  />
-                ))}
+                {[0.4, 0.9, 0.6, 1, 0.7, 0.5].map((scale, i) => {
+                  const dynamicHeight = isSpeaking
+                    ? Math.max(8, scale * 26)
+                    : isListening
+                    ? Math.max(6, (micVolume * 36 * scale) + (liveTranscript ? 8 : 4))
+                    : 6;
+
+                  return (
+                    <span
+                      key={i}
+                      className={`w-1 rounded-full bg-cyan-400 transition-all duration-75 ${
+                        isSpeaking || (isListening && micVolume > 0.02)
+                          ? "bg-cyan-300"
+                          : "opacity-30 bg-slate-500"
+                      }`}
+                      style={{
+                        height: `${dynamicHeight}px`,
+                      }}
+                    />
+                  );
+                })}
               </div>
 
               <span className="text-[10px] font-mono tracking-tight text-cyan-200">
@@ -250,30 +408,64 @@ export function VoiceLiveArena({
                   : activeSpeaker === "dialetica"
                   ? "Dialética"
                   : isListening
-                  ? "Escutando"
+                  ? vadPhase === "pause_detected"
+                    ? "Pausa..."
+                    : "Escutando"
                   : "Voz Live"}
               </span>
             </div>
           </div>
         </div>
 
-        {/* Active Speaker Status Caption */}
-        <div className="mt-4 flex items-center gap-2 px-3 py-1 rounded-full bg-white/[0.04] border border-white/10 text-xs text-slate-300 backdrop-blur-md">
-          {visualStyle.speakerIcon}
-          <span className="font-medium tracking-wide">{visualStyle.statusText}</span>
+        {/* Active Speaker Status Caption & Barge-in Guidance */}
+        <div className="mt-3 flex flex-col items-center gap-1">
+          <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/[0.04] border border-white/10 text-xs text-slate-300 backdrop-blur-md">
+            {visualStyle.speakerIcon}
+            <span className="font-semibold tracking-wide">{visualStyle.statusText}</span>
+          </div>
+
+          <span className="text-[10px] text-slate-400 tracking-tight">
+            {visualStyle.subStatus}
+          </span>
+
+          {/* Barge-in notice if interrupted */}
+          {interruptedCount > 0 && !isSpeaking && (
+            <div className="flex items-center gap-1 text-[10px] text-amber-300/80 mt-0.5">
+              <Radio className="w-3 h-3 text-amber-400 animate-pulse" />
+              <span>Interrupção registrada • Palavra concedida a você</span>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Live Clean Transcription Scroll Area */}
-      <div className="relative z-10 w-full max-h-[38vh] overflow-y-auto rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 p-3 sm:p-4 space-y-3 shadow-inner">
+      <div className="relative z-10 w-full max-h-[34vh] overflow-y-auto rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 p-3 sm:p-4 space-y-3 shadow-inner">
         {/* User's Current Live Speech Transcript (in real time) */}
         {liveTranscript && (
           <div className="flex flex-col items-end animate-in fade-in duration-100">
-            <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider mb-0.5">
-              Você está dizendo...
-            </span>
-            <div className="bg-emerald-950/40 border border-emerald-500/40 text-emerald-100 rounded-xl px-3 py-2 text-xs sm:text-sm italic max-w-[90%] shadow-md">
-              "{liveTranscript}"
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">
+                Você falando...
+              </span>
+              {vadPhase === "pause_detected" && (
+                <span className="text-[10px] text-teal-300 bg-teal-950/80 px-2 py-0.5 rounded-full border border-teal-500/30 flex items-center gap-1 font-mono">
+                  <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-ping"></span>
+                  Pausa detectada ({((silenceCountdownMs || 600) / 1000).toFixed(1)}s)
+                </span>
+              )}
+            </div>
+
+            <div className="bg-emerald-950/50 border border-emerald-500/40 text-emerald-100 rounded-xl px-3 py-2 text-xs sm:text-sm italic max-w-[92%] shadow-md flex items-center justify-between gap-2">
+              <p className="flex-1">"{liveTranscript}"</p>
+              {onTriggerManualSend && (
+                <button
+                  onClick={onTriggerManualSend}
+                  className="p-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/40 text-emerald-300 border border-emerald-400/40 shrink-0 transition-colors"
+                  title="Enviar imediatamente sem aguardar silêncio"
+                >
+                  <SendHorizontal className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -324,12 +516,11 @@ export function VoiceLiveArena({
 
         {messages.length === 0 && !liveTranscript && (
           <div className="text-center py-4 text-xs text-slate-400">
-            <p className="text-slate-300 font-medium mb-1">
+            <p className="text-slate-300 font-semibold mb-1">
               Arena Dialética de Voz Pronta
             </p>
-            <p className="text-[11px] text-slate-500">
-              Fale pelo microfone com naturalidade. O Dialética responderá em áudio
-              e o Árbitro Epistêmico checará os fatos de forma independente.
+            <p className="text-[11px] text-slate-400 max-w-xs mx-auto leading-relaxed">
+              Fale ao microfone com naturalidade. O sistema detecta suas pausas automaticamente e você pode intervir por voz a qualquer momento para interromper o áudio.
             </p>
           </div>
         )}
@@ -338,7 +529,7 @@ export function VoiceLiveArena({
       </div>
 
       {/* Bottom Voice Controls & Quick Action Dock */}
-      <div className="relative z-10 mt-3 pt-2 border-t border-white/10 flex flex-col items-center gap-3">
+      <div className="relative z-10 mt-3 pt-2 border-t border-white/10 flex flex-col items-center gap-2.5">
         {/* Action Row: Fact-Checker Trigger & Secondary Actions */}
         <div className="w-full flex items-center justify-between gap-2 px-1 text-xs">
           {/* Fact Check Trigger */}
@@ -363,6 +554,31 @@ export function VoiceLiveArena({
             <span>Artefatos</span>
           </button>
 
+          {/* Sessions Manager */}
+          {onOpenSessionsModal && (
+            <button
+              onClick={onOpenSessionsModal}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-slate-300 text-xs font-medium transition-colors"
+              title="Gerenciar e carregar sessões de debate anteriores"
+            >
+              <FolderOpen className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Sessões</span>
+            </button>
+          )}
+
+          {/* New Debate Button */}
+          {onStartNewDebate && (
+            <button
+              id="btn-voice-arena-new-clean-debate"
+              onClick={onStartNewDebate}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-cyan-950/50 hover:bg-cyan-900/70 border border-cyan-500/40 text-cyan-200 text-xs font-semibold transition-all shadow-sm"
+              title="Iniciar nova conversa / debate em branco"
+            >
+              <Plus className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Novo</span>
+            </button>
+          )}
+
           {/* Switch to Full Text Mode Button */}
           <button
             onClick={onSwitchToTextMode}
@@ -374,14 +590,14 @@ export function VoiceLiveArena({
           </button>
         </div>
 
-        {/* Primary Giant Glowing Mic Control */}
+        {/* Primary Giant Glowing Mic Control with Barge-In & Instant Trigger */}
         <div className="flex items-center justify-center gap-4 w-full">
           {/* Stop Audio Button if currently speaking */}
           {isSpeaking && (
             <button
               onClick={onStopSpeaking}
-              className="p-3.5 rounded-full bg-rose-950/60 hover:bg-rose-900/70 border border-rose-500/40 text-rose-300 shadow-lg transition-all"
-              title="Interromper fala da IA"
+              className="p-3.5 rounded-full bg-rose-950/60 hover:bg-rose-900/70 border border-rose-500/40 text-rose-300 shadow-lg transition-all animate-pulse"
+              title="Interromper fala da IA manualmente (ou apenas fale ao microfone)"
             >
               <Square className="w-5 h-5 fill-current" />
             </button>
@@ -404,11 +620,28 @@ export function VoiceLiveArena({
               <MicOff className="w-7 h-7 sm:w-8 sm:h-8 opacity-90" />
             )}
           </button>
+
+          {/* Quick Instant Send Button if live transcript exists */}
+          {isListening && liveTranscript && onTriggerManualSend && (
+            <button
+              onClick={onTriggerManualSend}
+              className="p-3.5 rounded-full bg-emerald-950/60 hover:bg-emerald-900/70 border border-emerald-500/40 text-emerald-300 shadow-lg transition-all"
+              title="Enviar agora sem aguardar silêncio"
+            >
+              <SendHorizontal className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         <p className="text-[11px] text-slate-400 font-mono text-center">
-          {isListening
-            ? "Fale ao microfone • Pausa de 1.5s envia a fala"
+          {isSpeaking
+            ? "Dialética falando • Fale para interromper (barge-in automático)"
+            : vadPhase === "pause_detected"
+            ? `Silêncio detectado (${((silenceCountdownMs || 600) / 1000).toFixed(1)}s) • Disparando resposta...`
+            : isListening && liveTranscript
+            ? "Ouvindo sua fala • Pausa ou pergunta dispara resposta imediata"
+            : isListening
+            ? "Ouvindo você • Detecção precisa de voz e silêncio ativa"
             : "Toque para abrir canal de voz"}
         </p>
       </div>
