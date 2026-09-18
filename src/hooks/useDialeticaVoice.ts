@@ -108,10 +108,12 @@ export function detectSpeechCadence(text: string): CadenceAnalysis {
   };
 }
 
-// Exclusively plays a subtle, pleasant micro-chime on pre-response capture:
-// Confirms that the pause in user speech was detected and the system is initiating its reply.
-// All other disruptive beeps (mic start, mic end, barge-in) are eliminated as requested.
-function playPreResponseChime(audioCtx: AudioContext | null) {
+// Sinal de Gatilho de Prontidão (Audible Readiness Cue):
+// Toca de forma extremamente sutil, suave e elegante (dois tons harmônicos ascendentes)
+// exclusivamente quando o modelo conclui sua réplica (detecta uma pausa reflexiva no diálogo)
+// e está 100% pronto para receber a entrada de voz do usuário.
+// Durante a fala ativa (do usuário ou do modelo), NENHUM sinal de aviso é emitido.
+function playReadinessCue(audioCtx: AudioContext | null) {
   if (!audioCtx) return;
   if (audioCtx.state === "suspended") {
     audioCtx.resume().catch(() => {});
@@ -119,23 +121,33 @@ function playPreResponseChime(audioCtx: AudioContext | null) {
 
   try {
     const now = audioCtx.currentTime;
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
 
-    osc.type = "sine";
-    // Soft, pleasant harmonic tone (480Hz -> 540Hz subtle lift)
-    osc.frequency.setValueAtTime(480, now);
-    osc.frequency.exponentialRampToValueAtTime(540, now + 0.055);
+    // Primeiro tom senoidal suave (D5 ~587Hz)
+    const osc1 = audioCtx.createOscillator();
+    const gain1 = audioCtx.createGain();
+    osc1.type = "sine";
+    osc1.frequency.setValueAtTime(587.33, now);
+    gain1.gain.setValueAtTime(0.025, now);
+    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
 
-    // Very gentle volume (0.045), fading out smoothly in 70ms
-    gain.gain.setValueAtTime(0.045, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+    osc1.connect(gain1);
+    gain1.connect(audioCtx.destination);
+    osc1.start(now);
+    osc1.stop(now + 0.08);
 
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
+    // Segundo tom harmônico em elevação sutil (F#5 ~740Hz), criando um acorde de prontidão límpido
+    const osc2 = audioCtx.createOscillator();
+    const gain2 = audioCtx.createGain();
+    osc2.type = "sine";
+    osc2.frequency.setValueAtTime(739.99, now + 0.045);
+    gain2.gain.setValueAtTime(0.0001, now);
+    gain2.gain.setValueAtTime(0.022, now + 0.045);
+    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
 
-    osc.start(now);
-    osc.stop(now + 0.07);
+    osc2.connect(gain2);
+    gain2.connect(audioCtx.destination);
+    osc2.start(now + 0.045);
+    osc2.stop(now + 0.14);
   } catch (e) {
     // Ignore audio context errors
   }
@@ -229,10 +241,7 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
           cadenceHint: "Pausa capturada • Formulando réplica...",
         }));
 
-        // Pre-response chime: exclusively signals that the pause was captured and reply generation begins
-        if (audioContextRef.current) {
-          playPreResponseChime(audioContextRef.current);
-        }
+        // Zero ruído durante a fala: nenhum sinal de aviso é tocado durante a fala ou pausa do usuário.
 
         // Safety Watchdog: recover cleanly if backend fails or speech queue never starts within 18s
         if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
@@ -245,6 +254,9 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
               activeSpeaker: "user",
               cadenceHint: "Pronto para sua fala",
             }));
+            if (audioContextRef.current) {
+              playReadinessCue(audioContextRef.current);
+            }
             restartRecognitionSafely();
           }
         }, 18000);
@@ -479,7 +491,13 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
           cadenceHint: "Sua vez • Fale quando quiser",
         }));
 
-        // Note: mic_on beep eliminated to ensure clean conversational silence
+        // Sinal de gatilho de prontidão (Audible Cue):
+        // Toca apenas quando o modelo conclui sua exposição, detecta a pausa reflexiva
+        // e está 100% pronto para receber a fala do usuário.
+        if (audioContextRef.current) {
+          playReadinessCue(audioContextRef.current);
+        }
+
         restartRecognitionSafely();
       } else {
         setVoiceState((prev) => ({
@@ -779,7 +797,10 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
     // Initialize Web Audio API energy monitoring
     await initMicAudioContext();
 
-    // Note: mic_on beep eliminated to ensure clean conversational silence without distracting beeps
+    // Sinal sutil de prontidão indicando que o motor está pronto para receber a fala
+    if (audioContextRef.current) {
+      playReadinessCue(audioContextRef.current);
+    }
 
     if (!recognitionRef.current) return;
     try {

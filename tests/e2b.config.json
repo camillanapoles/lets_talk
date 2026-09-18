@@ -1,0 +1,23 @@
+{
+  "sandboxName": "dialetica-operational-sandbox",
+  "template": "base",
+  "timeoutMs": 300000,
+  "env": {
+    "NODE_ENV": "test",
+    "PORT": "3000"
+  },
+  "tests": [
+    {
+      "name": "Operational Functionality Suite",
+      "command": "npx tsx scripts/run-operational-tests.ts"
+    },
+    {
+      "name": "Static Type & Linter Verification",
+      "command": "npm run lint"
+    },
+    {
+      "name": "Production Compilation Bundle",
+      "command": "npm run build"
+    }
+  ]
+}

@@ -9,7 +9,9 @@
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:operational": "tsx scripts/run-operational-tests.ts",
+    "test:e2b": "tsx tests/e2b-sandbox-runner.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

@@ -1,0 +1,24 @@
+{
+  "application": "Dialética",
+  "version": "1.0.0",
+  "runtime": "Node.js 20 / React 19 / Cloud Run",
+  "port": 3000,
+  "supportedModels": [
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash-thinking"
+  ],
+  "audioConfig": {
+    "sampleRate": 24000,
+    "channels": 1,
+    "format": "pcm_s16le",
+    "readinessCueFrequenciesHz": [587.33, 739.99],
+    "questionSilenceThresholdMs": 600,
+    "statementSilenceThresholdMs": 850
+  },
+  "invariants": {
+    "singleSessionAuthority": "src/App.tsx",
+    "zeroWarningDuringSpeech": true,
+    "autoSaveBeforeReset": true
+  }
+}
