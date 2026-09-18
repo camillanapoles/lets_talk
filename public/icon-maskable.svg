@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="dialGradMask" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06b6d4" />
+      <stop offset="50%" stop-color="#3b82f6" />
+      <stop offset="100%" stop-color="#8b5cf6" />
+    </linearGradient>
+  </defs>
+  <!-- 15% safe padding for Android adaptive icon mask -->
+  <rect width="512" height="512" fill="#0b0f19" />
+  <g transform="scale(0.75) translate(85, 85)">
+    <circle cx="256" cy="256" r="180" fill="none" stroke="url(#dialGradMask)" stroke-width="20" opacity="0.4" stroke-dasharray="12 12" />
+    <circle cx="216" cy="256" r="90" fill="none" stroke="#38bdf8" stroke-width="24" />
+    <circle cx="296" cy="256" r="90" fill="none" stroke="#a78bfa" stroke-width="24" />
+    <line x1="256" y1="120" x2="256" y2="392" stroke="#f8fafc" stroke-width="24" stroke-linecap="round" />
+    <circle cx="256" cy="256" r="22" fill="#38bdf8" />
+  </g>
+</svg>

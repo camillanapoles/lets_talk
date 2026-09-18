@@ -1,0 +1,7 @@
+{
+  "name": "Dialética - Debate Científico & Filosófico",
+  "description": "Aplicativo Android público para debates profundos baseados em ciência, lógica, evidências e filosofia com voz interativa e verificação de fatos.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
