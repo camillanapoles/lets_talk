@@ -345,6 +345,39 @@ app.get("/api/test-suite", async (_req, res) => {
   });
 });
 
+// Helper: resilient model cascade across available Gemini models
+async function generateContentWithResilientCascade(
+  ai: any,
+  preferredModel: string,
+  contents: any[],
+  config: any
+): Promise<{ text: string; modelUsed: string; response?: any }> {
+  const candidateModels = [
+    preferredModel,
+    "gemini-3.1-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-3.1-pro-preview",
+  ].filter((m, idx, arr) => Boolean(m) && arr.indexOf(m) === idx);
+
+  let lastErr: any = null;
+  for (const mod of candidateModels) {
+    try {
+      const resp = await ai.models.generateContent({
+        model: mod,
+        contents,
+        config,
+      });
+      if (resp && resp.text) {
+        return { text: resp.text, modelUsed: mod, response: resp };
+      }
+    } catch (err: any) {
+      console.warn(`Tentativa com ${mod} no cascade falhou (${err?.message}). Tentando próximo modelo...`);
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error("Todos os modelos no cascade falharam.");
+}
+
 // Chat endpoint (multi-turn conversation) with automatic fallback
 app.post("/api/chat", async (req, res) => {
   try {
@@ -373,35 +406,20 @@ app.post("/api/chat", async (req, res) => {
       parts: [{ text: msg.content }],
     }));
 
-    let response: any;
-    let finalModelUsed = targetModel;
+    const result = await generateContentWithResilientCascade(
+      ai,
+      targetModel,
+      contents,
+      {
+        systemInstruction,
+        temperature: 0.7,
+      }
+    );
 
-    try {
-      response = await ai.models.generateContent({
-        model: targetModel,
-        contents,
-        config: {
-          systemInstruction,
-          temperature: 0.7,
-        },
-      });
-    } catch (primaryErr: any) {
-      console.warn(`Falha com modelo ${targetModel}, tentando fallback resiliente para gemini-3.1-flash-lite:`, primaryErr?.message);
-      finalModelUsed = "gemini-3.1-flash-lite";
-      response = await ai.models.generateContent({
-        model: "gemini-3.1-flash-lite",
-        contents,
-        config: {
-          systemInstruction,
-          temperature: 0.7,
-        },
-      });
-    }
-
-    const text = response.text || "Não foi possível gerar uma resposta dialética neste momento.";
+    const text = result.text || "Não foi possível gerar uma resposta dialética neste momento.";
     res.json({
       text,
-      modelUsed: finalModelUsed,
+      modelUsed: result.modelUsed,
       roleUsed: roleId || "adaptive_debate",
       debateMode: debateMode || "open",
     });
@@ -444,37 +462,37 @@ app.post("/api/chat/stream", async (req, res) => {
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
 
-    try {
-      const streamResponse = await ai.models.generateContentStream({
-        model: targetModel,
-        contents,
-        config: {
-          systemInstruction,
-          temperature: 0.7,
-        },
-      });
+    const streamCascade = [targetModel, "gemini-3.1-flash-lite", "gemini-3.1-pro-preview"].filter(
+      (m, idx, arr) => Boolean(m) && arr.indexOf(m) === idx
+    );
 
-      for await (const chunk of streamResponse) {
-        const chunkText = chunk.text;
-        if (chunkText) {
-          res.write(`data: ${JSON.stringify({ text: chunkText })}\n\n`);
+    let streamSucceeded = false;
+
+    for (const curModel of streamCascade) {
+      if (streamSucceeded) break;
+      try {
+        const streamResponse = await ai.models.generateContentStream({
+          model: curModel,
+          contents,
+          config: {
+            systemInstruction,
+            temperature: 0.7,
+          },
+        });
+
+        for await (const chunk of streamResponse) {
+          const chunkText = chunk.text;
+          if (chunkText) {
+            res.write(`data: ${JSON.stringify({ text: chunkText })}\n\n`);
+            streamSucceeded = true;
+          }
         }
-      }
-    } catch (streamErr: any) {
-      console.warn("Falha no stream do modelo primário, ativando fallback lite:", streamErr?.message);
-      const fallbackStream = await ai.models.generateContentStream({
-        model: "gemini-3.1-flash-lite",
-        contents,
-        config: {
-          systemInstruction,
-          temperature: 0.7,
-        },
-      });
-
-      for await (const chunk of fallbackStream) {
-        const chunkText = chunk.text;
-        if (chunkText) {
-          res.write(`data: ${JSON.stringify({ text: chunkText })}\n\n`);
+        if (streamSucceeded) break;
+      } catch (streamErr: any) {
+        console.warn(`Stream falhou com ${curModel}:`, streamErr?.message);
+        if (streamSucceeded) {
+          // If chunks were already written, do not switch mid-stream
+          break;
         }
       }
     }
@@ -555,16 +573,22 @@ Responda ESTRITAMENTE em JSON com a seguinte estrutura:
   "spokenAudioText": "Intervenção do Árbitro Epistêmico: A afirmação sobre a curvatura do espaço-tempo é plenamente corroborada pela relatividade geral e pelas observações de ondas gravitacionais pelo LIGO."
 }`;
 
-    const factCheckResponse = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: [{ parts: [{ text: factCheckerPrompt }] }],
-      config: {
-        responseMimeType: "application/json",
-        temperature: 0.2,
-      },
-    });
+    let rawJson = "{}";
+    try {
+      const factCheckResult = await generateContentWithResilientCascade(
+        ai,
+        "gemini-3.8-flash",
+        [{ parts: [{ text: factCheckerPrompt }] }],
+        {
+          responseMimeType: "application/json",
+          temperature: 0.2,
+        }
+      );
+      rawJson = factCheckResult.text || "{}";
+    } catch (modelErr: any) {
+      console.warn("Árbitro Epistêmico acionou fallback local estruturado:", modelErr?.message);
+    }
 
-    const rawJson = factCheckResponse.text || "{}";
     let parsedData: any = {};
     try {
       parsedData = JSON.parse(rawJson);

@@ -342,7 +342,12 @@ export default function App() {
     attachedImg?: GeneratedImage,
     isVoiceTurn?: boolean
   ) => {
-    if (!text.trim() || isLoading) return;
+    if (!text.trim()) return;
+    if (isLoading) {
+      showToast("Aguarde a Dialética concluir o raciocínio atual...");
+      resetVoiceState("Aguarde a conclusão da fala anterior");
+      return;
+    }
 
     setErrorMessage(null);
 
@@ -538,6 +543,8 @@ export default function App() {
           finalSpokenText,
           updatedFullHistory
         );
+      } else {
+        notifyTurnError("Não foi possível gerar a fala. Toque para tentar novamente.");
       }
     } catch (err: any) {
       console.error("Erro na chamada do debate:", err);
@@ -545,6 +552,7 @@ export default function App() {
       setErrorMessage(errMsg);
       // Remove placeholder on total error
       setMessages((prev) => prev.filter((m) => m.id !== assistantPlaceholderId));
+      notifyTurnError("Instabilidade na conexão • Toque no microfone para tentar de novo");
     } finally {
       setIsLoading(false);
     }
@@ -566,7 +574,19 @@ export default function App() {
     speakText,
     stopSpeaking,
     triggerManualSend,
+    notifyTurnError,
+    resetVoiceState,
   } = useDialeticaVoice(handleUserVoiceSpoken);
+
+  // Retry the last user prompt in case of error
+  const handleRetryLastTurn = useCallback(() => {
+    setErrorMessage(null);
+    if (messages.length === 0) return;
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
+    if (lastUserMsg && lastUserMsg.content) {
+      handleSendMessage(lastUserMsg.content, undefined, sessionUIMode === "voice_live");
+    }
+  }, [messages, sessionUIMode]);
 
   // Toggle Microphone in Voice Arena
   const handleToggleMic = () => {
@@ -985,6 +1005,9 @@ export default function App() {
             onRequestEvidence={(prompt) => handleSendMessage(prompt)}
             onSetCustomTopic={(newTopic) => setCustomTopic(newTopic)}
             onTriggerManualSend={triggerManualSend}
+            errorMessage={errorMessage}
+            onClearError={() => setErrorMessage(null)}
+            onRetry={handleRetryLastTurn}
           />
         ) : (
           /* Text Chat Classic Mode */

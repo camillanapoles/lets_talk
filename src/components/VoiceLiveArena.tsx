@@ -53,6 +53,9 @@ interface VoiceLiveArenaProps {
   onRequestEvidence?: (prompt: string) => void;
   onSetCustomTopic?: (newTopic: string) => void;
   onTriggerManualSend?: () => void;
+  errorMessage?: string | null;
+  onClearError?: () => void;
+  onRetry?: () => void;
 }
 
 export function VoiceLiveArena({
@@ -84,6 +87,9 @@ export function VoiceLiveArena({
   onRequestEvidence,
   onSetCustomTopic,
   onTriggerManualSend,
+  errorMessage,
+  onClearError,
+  onRetry,
 }: VoiceLiveArenaProps) {
   const transcriptEndRef = useRef<HTMLDivElement>(null);
   const [isEditingTopic, setIsEditingTopic] = useState(false);
@@ -141,8 +147,8 @@ export function VoiceLiveArena({
         border: "border-cyan-400/70",
         ring: "ring-cyan-400/50",
         orbGradient: "from-cyan-500 via-indigo-600 to-purple-600",
-        statusText: "Dialética Sintetizando Resposta...",
-        subStatus: "Processando rigor lógico e premissas empíricas",
+        statusText: "Dialética Formulando Resposta...",
+        subStatus: cadenceHint || "Pausa capturada • Gerando réplica dialética",
         speakerIcon: <Zap className="w-4 h-4 text-cyan-300 animate-pulse" />,
       };
     }
@@ -175,8 +181,8 @@ export function VoiceLiveArena({
           border: "border-teal-400/60",
           ring: "ring-teal-400/50",
           orbGradient: "from-teal-500 via-emerald-500 to-cyan-600",
-          statusText: "Pausa Reflexiva Detectada",
-          subStatus: cadenceHint || `Concluindo turno em ${(silenceCountdownMs / 1000).toFixed(1)}s`,
+          statusText: "Pausa Detectada",
+          subStatus: cadenceHint || `Pausa capturada • Iniciando resposta em ${(silenceCountdownMs / 1000).toFixed(1)}s`,
           speakerIcon: <Zap className="w-4 h-4 text-teal-300 animate-pulse" />,
         };
       }
@@ -318,6 +324,35 @@ export function VoiceLiveArena({
                 <span className="hidden sm:inline">Definir</span>
               </button>
             )}
+          </div>
+        )}
+
+        {/* Real-time Arena Error Notification Banner */}
+        {errorMessage && (
+          <div className="w-full flex items-center justify-between gap-3 px-3.5 py-2 rounded-xl bg-rose-950/80 border border-rose-500/40 text-rose-200 text-xs shadow-lg backdrop-blur-md animate-in fade-in slide-in-from-top-1">
+            <div className="flex items-center gap-2 overflow-hidden">
+              <span className="w-2 h-2 rounded-full bg-rose-400 shrink-0 animate-ping"></span>
+              <span className="truncate">{errorMessage}</span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {onRetry && (
+                <button
+                  onClick={onRetry}
+                  className="px-2.5 py-1 rounded-lg bg-rose-600/40 hover:bg-rose-600/60 border border-rose-400/50 text-rose-100 font-semibold text-[11px] transition-colors"
+                >
+                  Tentar novamente
+                </button>
+              )}
+              {onClearError && (
+                <button
+                  onClick={onClearError}
+                  className="p-1 text-rose-300 hover:text-white"
+                  title="Fechar aviso"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>

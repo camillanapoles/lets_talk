@@ -108,51 +108,34 @@ export function detectSpeechCadence(text: string): CadenceAnalysis {
   };
 }
 
-// Utility: synthesizes subtle pleasant micro-earcons with Web Audio API (zero latency, zero assets)
-function playEarconTone(
-  audioCtx: AudioContext | null,
-  type: "barge_in" | "turn_sent" | "mic_on"
-) {
-  if (!audioCtx || audioCtx.state === "suspended") {
-    audioCtx?.resume().catch(() => {});
-  }
+// Exclusively plays a subtle, pleasant micro-chime on pre-response capture:
+// Confirms that the pause in user speech was detected and the system is initiating its reply.
+// All other disruptive beeps (mic start, mic end, barge-in) are eliminated as requested.
+function playPreResponseChime(audioCtx: AudioContext | null) {
   if (!audioCtx) return;
+  if (audioCtx.state === "suspended") {
+    audioCtx.resume().catch(() => {});
+  }
 
   try {
     const now = audioCtx.currentTime;
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
+
+    osc.type = "sine";
+    // Soft, pleasant harmonic tone (480Hz -> 540Hz subtle lift)
+    osc.frequency.setValueAtTime(480, now);
+    osc.frequency.exponentialRampToValueAtTime(540, now + 0.055);
+
+    // Very gentle volume (0.045), fading out smoothly in 70ms
+    gain.gain.setValueAtTime(0.045, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+
     osc.connect(gain);
     gain.connect(audioCtx.destination);
 
-    if (type === "barge_in") {
-      // Soft organic double-click indicating interruption registered
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(420, now);
-      osc.frequency.exponentialRampToValueAtTime(620, now + 0.05);
-      gain.gain.setValueAtTime(0.12, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
-      osc.start(now);
-      osc.stop(now + 0.06);
-    } else if (type === "turn_sent") {
-      // Subtle ascending confirmation chime
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(320, now);
-      osc.frequency.exponentialRampToValueAtTime(560, now + 0.08);
-      gain.gain.setValueAtTime(0.08, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
-      osc.start(now);
-      osc.stop(now + 0.09);
-    } else if (type === "mic_on") {
-      // Gentle opening tone (your turn to speak)
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(280, now);
-      osc.frequency.exponentialRampToValueAtTime(440, now + 0.1);
-      gain.gain.setValueAtTime(0.08, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
-      osc.start(now);
-      osc.stop(now + 0.12);
-    }
+    osc.start(now);
+    osc.stop(now + 0.07);
   } catch (e) {
     // Ignore audio context errors
   }
@@ -197,6 +180,7 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
   const voiceEnergyConsecutiveHits = useRef(0);
   // In-memory TTS audio cache (max 30 items) to eliminate duplicate network latency
   const ttsCacheRef = useRef<Map<string, string>>(new Map());
+  const watchdogTimerRef = useRef<any>(null);
 
   // Clear timers helper
   const clearSilenceDebounce = useCallback(() => {
@@ -242,12 +226,28 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
           vadPhase: "processing",
           silenceCountdownMs: 0,
           activeSpeaker: "dialetica",
-          cadenceHint: "Formulando réplica dialética...",
+          cadenceHint: "Pausa capturada • Formulando réplica...",
         }));
 
+        // Pre-response chime: exclusively signals that the pause was captured and reply generation begins
         if (audioContextRef.current) {
-          playEarconTone(audioContextRef.current, "turn_sent");
+          playPreResponseChime(audioContextRef.current);
         }
+
+        // Safety Watchdog: recover cleanly if backend fails or speech queue never starts within 18s
+        if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
+        watchdogTimerRef.current = setTimeout(() => {
+          if (!isSpeakingRef.current && isContinuousSessionRef.current) {
+            console.warn("Watchdog da arena ativado: resposta demorou ou falhou, restaurando escuta.");
+            setVoiceState((prev) => ({
+              ...prev,
+              vadPhase: "listening",
+              activeSpeaker: "user",
+              cadenceHint: "Pronto para sua fala",
+            }));
+            restartRecognitionSafely();
+          }
+        }, 18000);
 
         // Restart recognition cleanly so previous utterance results are flushed
         restartRecognitionSafely();
@@ -261,6 +261,10 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
   // Stop currently playing audio immediately (Instant Barge-in)
   const stopSpeaking = useCallback(
     (triggeredByBargeIn: boolean = false) => {
+      if (watchdogTimerRef.current) {
+        clearTimeout(watchdogTimerRef.current);
+        watchdogTimerRef.current = null;
+      }
       if (audioPlayerRef.current) {
         audioPlayerRef.current.pause();
         audioPlayerRef.current.currentTime = 0;
@@ -273,9 +277,7 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
       isPlayingQueueRef.current = false;
       isSpeakingRef.current = false;
 
-      if (triggeredByBargeIn && audioContextRef.current) {
-        playEarconTone(audioContextRef.current, "barge_in");
-      }
+      // Note: No barge_in beep played, honoring user's request for exclusively pre-response chime
 
       setVoiceState((prev) => ({
         ...prev,
@@ -432,11 +434,23 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
 
       speechStartTimeRef.current = Date.now();
 
+      let isFinished = false;
+      const safeFinish = () => {
+        if (isFinished) return;
+        isFinished = true;
+        clearTimeout(safetyTimer);
+        onComplete();
+      };
+
+      // Guard against Chrome Web Speech API getting stuck on utterances
+      const maxEstimatedDuration = Math.max(3500, Math.min(24000, (cleaned.length / 12) * 1000 + 4000));
+      const safetyTimer = setTimeout(safeFinish, maxEstimatedDuration);
+
       utterance.onend = () => {
-        setTimeout(onComplete, 250);
+        setTimeout(safeFinish, 200);
       };
       utterance.onerror = () => {
-        onComplete();
+        safeFinish();
       };
 
       window.speechSynthesis.speak(utterance);
@@ -465,10 +479,7 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
           cadenceHint: "Sua vez • Fale quando quiser",
         }));
 
-        if (audioContextRef.current) {
-          playEarconTone(audioContextRef.current, "mic_on");
-        }
-
+        // Note: mic_on beep eliminated to ensure clean conversational silence
         restartRecognitionSafely();
       } else {
         setVoiceState((prev) => ({
@@ -479,6 +490,12 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
         }));
       }
       return;
+    }
+
+    // Clear watchdog when reply speech begins
+    if (watchdogTimerRef.current) {
+      clearTimeout(watchdogTimerRef.current);
+      watchdogTimerRef.current = null;
     }
 
     isPlayingQueueRef.current = true;
@@ -762,9 +779,7 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
     // Initialize Web Audio API energy monitoring
     await initMicAudioContext();
 
-    if (audioContextRef.current) {
-      playEarconTone(audioContextRef.current, "mic_on");
-    }
+    // Note: mic_on beep eliminated to ensure clean conversational silence without distracting beeps
 
     if (!recognitionRef.current) return;
     try {
@@ -783,6 +798,10 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
 
   // Stop listening session
   const stopListening = useCallback(() => {
+    if (watchdogTimerRef.current) {
+      clearTimeout(watchdogTimerRef.current);
+      watchdogTimerRef.current = null;
+    }
     isContinuousSessionRef.current = false;
     isListeningRef.current = false;
     clearSilenceDebounce();
@@ -803,6 +822,50 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
     }));
   }, [clearSilenceDebounce, teardownMicAudio]);
 
+  // Handle errors or API failures gracefully without freezing arena
+  const notifyTurnError = useCallback(
+    (customHint?: string) => {
+      if (watchdogTimerRef.current) {
+        clearTimeout(watchdogTimerRef.current);
+        watchdogTimerRef.current = null;
+      }
+      isSpeakingRef.current = false;
+      isPlayingQueueRef.current = false;
+      setVoiceState((prev) => ({
+        ...prev,
+        isSpeaking: false,
+        vadPhase: isContinuousSessionRef.current ? "listening" : "idle",
+        activeSpeaker: isContinuousSessionRef.current ? "user" : "idle",
+        cadenceHint: customHint || "Instabilidade temporária • Toque para tentar novamente",
+      }));
+      if (isContinuousSessionRef.current) {
+        restartRecognitionSafely();
+      }
+    },
+    [restartRecognitionSafely]
+  );
+
+  // Clean state reset
+  const resetVoiceState = useCallback(
+    (customHint?: string) => {
+      if (watchdogTimerRef.current) {
+        clearTimeout(watchdogTimerRef.current);
+        watchdogTimerRef.current = null;
+      }
+      setVoiceState((prev) => ({
+        ...prev,
+        isSpeaking: false,
+        vadPhase: isContinuousSessionRef.current ? "listening" : "idle",
+        activeSpeaker: isContinuousSessionRef.current ? "user" : "idle",
+        cadenceHint: customHint || "Pronto",
+      }));
+      if (isContinuousSessionRef.current) {
+        restartRecognitionSafely();
+      }
+    },
+    [restartRecognitionSafely]
+  );
+
   return {
     voiceState,
     startListening,
@@ -810,5 +873,7 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
     speakText,
     stopSpeaking: () => stopSpeaking(false),
     triggerManualSend: () => triggerSendTurn(),
+    notifyTurnError,
+    resetVoiceState,
   };
 }
