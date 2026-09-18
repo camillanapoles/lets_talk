@@ -33,6 +33,7 @@ import {
   generateSmartSessionTitle,
   exportSessionsToJSON,
   importSessionsFromJSON,
+  exportSessionToMarkdown,
 } from "../utils/sessionStorage";
 
 interface SessionsManagerModalProps {
@@ -135,6 +136,20 @@ export function SessionsManagerModal({
     URL.revokeObjectURL(url);
     setFeedbackNotice({ type: "success", text: "Backup exportado para arquivo JSON." });
     setTimeout(() => setFeedbackNotice(null), 3000);
+  };
+
+  const handleExportSingleSessionMD = (session: DebateSession) => {
+    const mdStr = exportSessionToMarkdown(session);
+    const blob = new Blob([mdStr], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const cleanTitle = session.title.replace(/[^a-zA-Z0-9_\u00C0-\u00FF]/g, "_").slice(0, 30);
+    link.download = `dialetica_${cleanTitle}_${new Date().toISOString().slice(0, 10)}.md`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setFeedbackNotice({ type: "success", text: "Transcrição acadêmica exportada em Markdown (.md)!" });
+    setTimeout(() => setFeedbackNotice(null), 3500);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -502,6 +517,16 @@ export function SessionsManagerModal({
 
                     {/* Actions */}
                     <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
+                      {/* Export Markdown */}
+                      <button
+                        onClick={() => handleExportSingleSessionMD(session)}
+                        className="px-2 py-1.5 rounded-xl border border-white/10 hover:bg-white/5 text-[11px] text-slate-300 flex items-center gap-1 transition-colors hover:text-cyan-300"
+                        title="Exportar transcrição acadêmica em Markdown (.md)"
+                      >
+                        <FileText className="w-3.5 h-3.5 text-cyan-400" />
+                        <span className="hidden sm:inline">MD</span>
+                      </button>
+
                       {/* Toggle Details Accordion */}
                       <button
                         onClick={() =>

@@ -13,6 +13,7 @@ import {
   FolderOpen,
   Plus,
   Check,
+  Activity,
 } from "lucide-react";
 
 interface TopAppBarProps {
@@ -28,6 +29,7 @@ interface TopAppBarProps {
   onOpenDebateModeModal: () => void;
   onOpenArtifactsModal: () => void;
   onOpenSessionsModal: () => void;
+  onOpenDiagnostics?: () => void;
   onToggleSessionUIMode: () => void;
   onResetChat: () => void;
   isAndroidFrameMode: boolean;
@@ -48,6 +50,7 @@ export function TopAppBar({
   onOpenDebateModeModal,
   onOpenArtifactsModal,
   onOpenSessionsModal,
+  onOpenDiagnostics,
   onToggleSessionUIMode,
   onResetChat,
   isAndroidFrameMode,
@@ -202,6 +205,19 @@ export function TopAppBar({
         >
           <BookOpen className="w-4 h-4 text-cyan-400" />
         </button>
+
+        {/* System Diagnostics & Validity Suite */}
+        {onOpenDiagnostics && (
+          <button
+            id="system-diagnostics-btn"
+            type="button"
+            onClick={onOpenDiagnostics}
+            className="p-2 rounded-xl text-slate-300 hover:text-cyan-300 hover:bg-white/5 border border-white/10 transition-colors"
+            title="Diagnóstico de Engenharia de Software & Bateria de Testes NFR"
+          >
+            <Activity className="w-4 h-4 text-cyan-400" />
+          </button>
+        )}
 
         {/* Nova Conversa / Novo Debate */}
         <button

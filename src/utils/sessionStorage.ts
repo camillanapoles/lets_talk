@@ -21,13 +21,43 @@ export function loadSavedSessions(): DebateSession[] {
 }
 
 /**
- * Persist the entire array of sessions
+ * Persist the entire array of sessions with QuotaExceededError protection
  */
-export function persistSessions(sessions: DebateSession[]): void {
+export function persistSessions(sessions: DebateSession[]): boolean {
   try {
     localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(sessions));
-  } catch (err) {
-    console.error("Erro ao salvar sessões de debate no localStorage:", err);
+    return true;
+  } catch (err: any) {
+    console.warn("Falha no armazenamento local direto, ativando mitigação de cota:", err?.name);
+    // If QuotaExceededError, safely purge old image base64 payloads to save megabytes
+    if (err?.name === "QuotaExceededError" || err?.message?.includes("quota")) {
+      try {
+        const lightweightSessions = sessions.map((s, idx) => {
+          // Keep images for the 2 most recent sessions, strip heavy base64 from older ones
+          if (idx < 2) return s;
+          return {
+            ...s,
+            messages: s.messages.map((m) => {
+              if (m.attachedImage && m.attachedImage.url && m.attachedImage.url.startsWith("data:image")) {
+                return {
+                  ...m,
+                  attachedImage: {
+                    ...m.attachedImage,
+                    url: "", // Strip bulky base64, preserve metadata and prompt
+                  },
+                };
+              }
+              return m;
+            }),
+          };
+        });
+        localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(lightweightSessions));
+        return true;
+      } catch (retryErr) {
+        console.error("Falha irrecuperável de cota de armazenamento:", retryErr);
+      }
+    }
+    return false;
   }
 }
 
@@ -207,5 +237,87 @@ export function importSessionsFromJSON(jsonString: string): {
     return { success: true, count: importedCount };
   } catch (err: any) {
     return { success: false, count: 0, error: err?.message || "Erro ao ler JSON." };
+  }
+}
+
+/**
+ * Export a session to a formatted academic/scientific Markdown transcript
+ */
+export function exportSessionToMarkdown(session: DebateSession): string {
+  const dateStr = new Date(session.updatedAt || session.createdAt).toLocaleString("pt-BR");
+  let md = `# Transcrição Dialética: ${session.title}\n\n`;
+  md += `**Data:** ${dateStr}  \n`;
+  md += `**Modo de Debate:** ${session.debateMode === "formal" ? "Debate Formal Estruturado" : "Debate Aberto Livre"}  \n`;
+  md += `**Papel Dialético:** ${session.selectedRole?.title || "Dialética & Epistemologia"}  \n`;
+  md += `**Modelo Utilizado:** ${session.selectedModel || "gemini-3.8-flash"}  \n\n`;
+  md += `---\n\n`;
+
+  session.messages.forEach((msg, index) => {
+    const isModel = msg.role === "model";
+    const speaker = isModel ? "DIALÉTICA" : "USUÁRIO";
+    const time = new Date(msg.timestamp).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+
+    md += `### ${index + 1}. ${speaker} (${time})\n\n`;
+    md += `${msg.content}\n\n`;
+
+    if (msg.factChecks && msg.factChecks.length > 0) {
+      md += `> **⚖️ Intervenção do Árbitro Epistêmico**  \n`;
+      msg.factChecks.forEach((fc) => {
+        md += `> - **Asserção Avaliada:** *${fc.claim}*  \n`;
+        md += `> - **Status:** \`${fc.status}\` (Confiança: ${Math.round(fc.confidence * 100)}%)  \n`;
+        md += `> - **Análise:** ${fc.analysis}  \n`;
+        if (fc.sources && fc.sources.length > 0) {
+          md += `> - **Fontes Citadas:** ${fc.sources.map((s) => s.title).join(", ")}  \n`;
+        }
+      });
+      md += `\n`;
+    }
+
+    if (msg.attachedImage && msg.attachedImage.prompt) {
+      md += `> **🖼️ Diagrama Conceitual Gerado:** ${msg.attachedImage.prompt} (${msg.attachedImage.imageSize || "1K"})\n\n`;
+    }
+
+    md += `---\n\n`;
+  });
+
+  return md;
+}
+
+/**
+ * Diagnostic test to verify integrity of localStorage access and quota
+ */
+export function verifyStorageIntegrity(): {
+  isAvailable: boolean;
+  quotaUsable: boolean;
+  activeSessionsCount: number;
+  estimatedBytesUsed: number;
+  error?: string;
+} {
+  try {
+    const testKey = `dialetica_test_${Date.now()}`;
+    localStorage.setItem(testKey, "validity_check");
+    const retrieved = localStorage.getItem(testKey);
+    localStorage.removeItem(testKey);
+
+    if (retrieved !== "validity_check") {
+      return { isAvailable: false, quotaUsable: false, activeSessionsCount: 0, estimatedBytesUsed: 0, error: "Falha de leitura/escrita." };
+    }
+
+    const sessions = loadSavedSessions();
+    const rawData = localStorage.getItem(SESSIONS_STORAGE_KEY) || "";
+    return {
+      isAvailable: true,
+      quotaUsable: true,
+      activeSessionsCount: sessions.length,
+      estimatedBytesUsed: rawData.length * 2, // UTF-16 approx bytes
+    };
+  } catch (err: any) {
+    return {
+      isAvailable: false,
+      quotaUsable: false,
+      activeSessionsCount: 0,
+      estimatedBytesUsed: 0,
+      error: err?.message || "localStorage indisponível.",
+    };
   }
 }

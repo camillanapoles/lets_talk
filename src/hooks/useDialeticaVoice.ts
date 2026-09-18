@@ -10,8 +10,10 @@ export type VADPhase =
   | "idle"
   | "listening"
   | "speech_active"
+  | "question_detected"
   | "pause_detected"
   | "triggering"
+  | "processing"
   | "speaking";
 
 export interface VoiceState {
@@ -25,6 +27,85 @@ export interface VoiceState {
   vadPhase: VADPhase;
   silenceCountdownMs: number; // remaining ms before triggering response
   interruptedCount: number; // count of barge-ins
+  cadenceHint?: string; // e.g. "Pergunta detectada (550ms)"
+}
+
+export interface CadenceAnalysis {
+  isQuestion: boolean;
+  pauseDelayMs: number;
+  label: string;
+  detectedTrigger?: string;
+}
+
+/**
+ * High-precision Portuguese interrogative and cadence analyzer.
+ * In spoken Brazilian Portuguese, users rarely say punctuation marks like 'interrogação'.
+ * We inspect interrogative roots, conversational question tags, and declarative boundary tokens.
+ */
+export function detectSpeechCadence(text: string): CadenceAnalysis {
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
+
+  if (!trimmed) {
+    return { isQuestion: false, pauseDelayMs: 900, label: "Pausa reflexiva" };
+  }
+
+  // 1. Literal question mark
+  if (trimmed.includes("?")) {
+    return {
+      isQuestion: true,
+      pauseDelayMs: 550,
+      label: "Pergunta detectada (?)",
+      detectedTrigger: "?",
+    };
+  }
+
+  // 2. Interrogatives anywhere in phrase or conversational end-tags
+  const interrogativePatterns: Array<{ regex: RegExp; trigger: string }> = [
+    { regex: /\b(o que você acha|o que acha|o que você pensa|o que pensa)\b/i, trigger: "o que acha" },
+    { regex: /\b(o que é|o que são|o que significa|o que seria)\b/i, trigger: "o que é" },
+    { regex: /\b(o que|o que há|o que tem)\b/i, trigger: "o que" },
+    { regex: /\b(você concorda|concorda com|concorda que|concorda)\b/i, trigger: "concorda" },
+    { regex: /\b(você acha|acha que|acha isso|acha mesmo)\b/i, trigger: "acha que" },
+    { regex: /\b(como assim|como você|como podemos|como explicar|como refutar|como responder|como funciona)\b/i, trigger: "como" },
+    { regex: /\b(por que|porque|por quê|por qual razão|por qual motivo)\b/i, trigger: "por que" },
+    { regex: /\b(qual é|qual o|qual a|quais são|qual seu|qual sua|qual seria|quais seriam)\b/i, trigger: "qual" },
+    { regex: /\b(quem|de quem|com quem|para quem)\b/i, trigger: "quem" },
+    { regex: /\b(quando|onde|aonde|de onde)\b/i, trigger: "quando/onde" },
+    { regex: /\b(quanto|quantos|quantas|quanto custa|quanto vale)\b/i, trigger: "quanto" },
+    { regex: /\b(será que|seria possível|não seria|não acha|não concorda)\b/i, trigger: "será que" },
+    { regex: /\b(faz sentido|me diga|me explica|explica aí)\b/i, trigger: "faz sentido" },
+    { regex: /\b(qual a sua tese|qual seu argumento|qual sua opinião|qual o seu ponto)\b/i, trigger: "qual a tese" },
+    // End conversational tags
+    { regex: /(né|certo|correto|verdade|não é|ou não|concorda)\s*$/i, trigger: "tag interrogativa" },
+  ];
+
+  for (const { regex, trigger } of interrogativePatterns) {
+    if (regex.test(lower)) {
+      return {
+        isQuestion: true,
+        pauseDelayMs: 550, // Fast cadence for questions, like Gemini Live
+        label: `Pergunta identificada (${trigger})`,
+        detectedTrigger: trigger,
+      };
+    }
+  }
+
+  // 3. Declarative termination punctuation
+  if (/[.!;:]\s*$/.test(trimmed)) {
+    return {
+      isQuestion: false,
+      pauseDelayMs: 750,
+      label: "Fim de oração",
+    };
+  }
+
+  // 4. Default reflective breathing pause
+  return {
+    isQuestion: false,
+    pauseDelayMs: 900,
+    label: "Pausa reflexiva",
+  };
 }
 
 // Utility: synthesizes subtle pleasant micro-earcons with Web Audio API (zero latency, zero assets)
@@ -57,17 +138,17 @@ function playEarconTone(
       // Subtle ascending confirmation chime
       osc.type = "sine";
       osc.frequency.setValueAtTime(320, now);
-      osc.frequency.exponentialRampToValueAtTime(540, now + 0.08);
+      osc.frequency.exponentialRampToValueAtTime(560, now + 0.08);
       gain.gain.setValueAtTime(0.08, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
       osc.start(now);
       osc.stop(now + 0.09);
     } else if (type === "mic_on") {
-      // Gentle opening tone
+      // Gentle opening tone (your turn to speak)
       osc.type = "sine";
       osc.frequency.setValueAtTime(280, now);
       osc.frequency.exponentialRampToValueAtTime(440, now + 0.1);
-      gain.gain.setValueAtTime(0.09, now);
+      gain.gain.setValueAtTime(0.08, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
       osc.start(now);
       osc.stop(now + 0.12);
@@ -89,6 +170,7 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
     vadPhase: "idle",
     silenceCountdownMs: 0,
     interruptedCount: 0,
+    cadenceHint: undefined,
   });
 
   const onUserSpokenRef = useRef(onUserSpoken);
@@ -103,6 +185,9 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
   const currentSpeechTextRef = useRef("");
   const isSpeakingRef = useRef(false);
   const isListeningRef = useRef(false);
+  // Continuous conversation loop flag (Gemini Live style)
+  const isContinuousSessionRef = useRef(false);
+  const speechStartTimeRef = useRef<number>(0);
 
   // Web Audio Context & Analyser for real-time VAD & Barge-in
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -110,33 +195,105 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
   const micStreamRef = useRef<MediaStream | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const voiceEnergyConsecutiveHits = useRef(0);
+  // In-memory TTS audio cache (max 30 items) to eliminate duplicate network latency
+  const ttsCacheRef = useRef<Map<string, string>>(new Map());
+
+  // Clear timers helper
+  const clearSilenceDebounce = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    setVoiceState((prev) => ({ ...prev, silenceCountdownMs: 0 }));
+  }, []);
+
+  // Safe restart of speech recognition
+  const restartRecognitionSafely = useCallback(() => {
+    if (!recognitionRef.current || !isContinuousSessionRef.current) return;
+    try {
+      recognitionRef.current.abort();
+    } catch (e) {}
+    setTimeout(() => {
+      if (!isContinuousSessionRef.current || !recognitionRef.current) return;
+      try {
+        recognitionRef.current.start();
+      } catch (e) {
+        // Already active
+      }
+    }, 120);
+  }, []);
+
+  // Dispatch accumulated speech turn immediately
+  const triggerSendTurn = useCallback(
+    (textToDispatch?: string) => {
+      clearSilenceDebounce();
+      const text = (textToDispatch || currentSpeechTextRef.current).trim();
+      if (text.length >= 2) {
+        currentSpeechTextRef.current = "";
+
+        // Transition to processing state (AI thinking)
+        setVoiceState((prev) => ({
+          ...prev,
+          liveTranscript: "",
+          vadPhase: "processing",
+          silenceCountdownMs: 0,
+          activeSpeaker: "dialetica",
+          cadenceHint: "Formulando réplica dialética...",
+        }));
+
+        if (audioContextRef.current) {
+          playEarconTone(audioContextRef.current, "turn_sent");
+        }
+
+        // Restart recognition cleanly so previous utterance results are flushed
+        restartRecognitionSafely();
+
+        onUserSpokenRef.current(text);
+      }
+    },
+    [clearSilenceDebounce, restartRecognitionSafely]
+  );
 
   // Stop currently playing audio immediately (Instant Barge-in)
-  const stopSpeaking = useCallback((triggeredByBargeIn: boolean = false) => {
-    if (audioPlayerRef.current) {
-      audioPlayerRef.current.pause();
-      audioPlayerRef.current.currentTime = 0;
-      audioPlayerRef.current = null;
-    }
-    if (typeof window !== "undefined" && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-    }
-    speechQueueRef.current = [];
-    isPlayingQueueRef.current = false;
-    isSpeakingRef.current = false;
+  const stopSpeaking = useCallback(
+    (triggeredByBargeIn: boolean = false) => {
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.pause();
+        audioPlayerRef.current.currentTime = 0;
+        audioPlayerRef.current = null;
+      }
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+      speechQueueRef.current = [];
+      isPlayingQueueRef.current = false;
+      isSpeakingRef.current = false;
 
-    if (triggeredByBargeIn && audioContextRef.current) {
-      playEarconTone(audioContextRef.current, "barge_in");
-    }
+      if (triggeredByBargeIn && audioContextRef.current) {
+        playEarconTone(audioContextRef.current, "barge_in");
+      }
 
-    setVoiceState((prev) => ({
-      ...prev,
-      isSpeaking: false,
-      activeSpeaker: prev.isListening ? "user" : "idle",
-      vadPhase: prev.isListening ? "listening" : "idle",
-      interruptedCount: triggeredByBargeIn ? prev.interruptedCount + 1 : prev.interruptedCount,
-    }));
-  }, []);
+      setVoiceState((prev) => ({
+        ...prev,
+        isSpeaking: false,
+        activeSpeaker: isContinuousSessionRef.current ? "user" : "idle",
+        vadPhase: isContinuousSessionRef.current ? "listening" : "idle",
+        interruptedCount: triggeredByBargeIn ? prev.interruptedCount + 1 : prev.interruptedCount,
+        cadenceHint: triggeredByBargeIn ? "Interrupção ativa • Palavra concedida a você" : undefined,
+      }));
+
+      // If user interrupted, immediately ensure recognition is ready for their input
+      if (isContinuousSessionRef.current) {
+        isListeningRef.current = true;
+        restartRecognitionSafely();
+      }
+    },
+    [restartRecognitionSafely]
+  );
 
   // Web Audio setup for live mic energy analysis & instant barge-in
   const initMicAudioContext = useCallback(async () => {
@@ -159,7 +316,7 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
 
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.4;
+      analyser.smoothingTimeConstant = 0.35;
       analyserRef.current = analyser;
 
       const source = ctx.createMediaStreamSource(stream);
@@ -188,13 +345,17 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
           return prev;
         });
 
-        // Instant Barge-In detection:
-        // If AI is currently speaking and user speaks (rms > threshold for 2 consecutive frames)
+        // Smart Barge-In detection:
+        // When AI is speaking, protect against speaker echo feedback loop.
+        // Require:
+        // 1. At least 600ms have elapsed since AI started speaking (grace period against playback start burst)
+        // 2. High deliberate vocal energy (RMS > 0.12) sustained for 3 consecutive frames
         if (isSpeakingRef.current) {
-          if (rms > 0.042) {
+          const speechElapsed = Date.now() - speechStartTimeRef.current;
+          if (speechElapsed > 600 && rms > 0.12) {
             voiceEnergyConsecutiveHits.current += 1;
-            if (voiceEnergyConsecutiveHits.current >= 2) {
-              // User interrupted the AI!
+            if (voiceEnergyConsecutiveHits.current >= 3) {
+              // Deliberate user voice interruption!
               stopSpeaking(true);
               voiceEnergyConsecutiveHits.current = 0;
             }
@@ -233,39 +394,205 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
     analyserRef.current = null;
   }, []);
 
-  // Clear timers helper
-  const clearSilenceDebounce = useCallback(() => {
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
-    if (countdownIntervalRef.current) {
-      clearInterval(countdownIntervalRef.current);
-      countdownIntervalRef.current = null;
-    }
-    setVoiceState((prev) => ({ ...prev, silenceCountdownMs: 0 }));
-  }, []);
+  // Native Web Speech Synthesis player with distinct timbre/pitch
+  const playWithWebSpeechFallback = useCallback(
+    (text: string, role: "dialetica" | "arbitro", onComplete: () => void) => {
+      if (typeof window === "undefined" || !window.speechSynthesis) {
+        onComplete();
+        return;
+      }
 
-  // Dispatch accumulated speech immediately
-  const triggerSendTurn = useCallback(
-    (textToDispatch?: string) => {
-      clearSilenceDebounce();
-      const text = (textToDispatch || currentSpeechTextRef.current).trim();
-      if (text.length >= 2) {
-        currentSpeechTextRef.current = "";
+      window.speechSynthesis.cancel();
+
+      // Clean text for natural speech
+      const cleaned = text
+        .replace(/[*_#`~>\[\]]/g, "")
+        .replace(/\(http[^)]+\)/g, "")
+        .slice(0, 1000);
+
+      const utterance = new SpeechSynthesisUtterance(cleaned);
+      utterance.lang = "pt-BR";
+
+      // Distinct vocal signatures:
+      if (role === "arbitro") {
+        // O Árbitro: voz mais grave, cadenciada, solene de juiz
+        utterance.pitch = 0.8;
+        utterance.rate = 0.96;
+      } else {
+        // O Dialética: voz reflexiva, clara, dinâmica
+        utterance.pitch = 1.02;
+        utterance.rate = 1.05;
+      }
+
+      const voices = window.speechSynthesis.getVoices();
+      const ptVoice = voices.find((v) => v.lang.startsWith("pt")) || voices[0];
+      if (ptVoice) {
+        utterance.voice = ptVoice;
+      }
+
+      speechStartTimeRef.current = Date.now();
+
+      utterance.onend = () => {
+        setTimeout(onComplete, 250);
+      };
+      utterance.onerror = () => {
+        onComplete();
+      };
+
+      window.speechSynthesis.speak(utterance);
+    },
+    []
+  );
+
+  // Internal audio queue processor with Gemini Live continuity
+  const processNextSpeechItem = useCallback(async () => {
+    // If queue is empty, finish speaking and RETURN CONTROL TO USER (Gemini Live loop!)
+    if (speechQueueRef.current.length === 0) {
+      isPlayingQueueRef.current = false;
+      isSpeakingRef.current = false;
+
+      if (isContinuousSessionRef.current) {
+        // Return to listening immediately!
+        isListeningRef.current = true;
         setVoiceState((prev) => ({
           ...prev,
+          isSpeaking: false,
+          isListening: true,
+          activeSpeaker: "user",
+          vadPhase: "listening",
           liveTranscript: "",
-          vadPhase: "triggering",
           silenceCountdownMs: 0,
+          cadenceHint: "Sua vez • Fale quando quiser",
         }));
+
         if (audioContextRef.current) {
-          playEarconTone(audioContextRef.current, "turn_sent");
+          playEarconTone(audioContextRef.current, "mic_on");
         }
-        onUserSpokenRef.current(text);
+
+        restartRecognitionSafely();
+      } else {
+        setVoiceState((prev) => ({
+          ...prev,
+          isSpeaking: false,
+          activeSpeaker: "idle",
+          vadPhase: "idle",
+        }));
+      }
+      return;
+    }
+
+    isPlayingQueueRef.current = true;
+    isSpeakingRef.current = true;
+    speechStartTimeRef.current = Date.now();
+    const item = speechQueueRef.current.shift()!;
+
+    setVoiceState((prev) => ({
+      ...prev,
+      isSpeaking: true,
+      activeSpeaker: item.role,
+      vadPhase: "speaking",
+      cadenceHint: "Discursando • Toque no orbe ou fale para interromper",
+    }));
+
+    // Method A: If base64 audio is already provided
+    if (item.base64) {
+      try {
+        const audio = new Audio(item.base64);
+        audioPlayerRef.current = audio;
+        audio.onended = () => {
+          setTimeout(processNextSpeechItem, 250);
+        };
+        audio.onerror = () => {
+          playWithWebSpeechFallback(item.text, item.role, processNextSpeechItem);
+        };
+        speechStartTimeRef.current = Date.now();
+        await audio.play();
+        return;
+      } catch (err) {
+        console.warn("Falha ao reproduzir áudio base64 pré-gerado, usando fallback:", err);
+      }
+    }
+
+    // Method B: Check TTS in-memory cache or call server TTS endpoint with 2.5s fast timeout
+    const cacheKey = `${item.role}:${item.text.slice(0, 150)}`;
+    const cachedAudioUrl = ttsCacheRef.current.get(cacheKey);
+
+    if (cachedAudioUrl) {
+      try {
+        const audio = new Audio(cachedAudioUrl);
+        audioPlayerRef.current = audio;
+        audio.onended = () => {
+          setTimeout(processNextSpeechItem, 250);
+        };
+        audio.onerror = () => {
+          playWithWebSpeechFallback(item.text, item.role, processNextSpeechItem);
+        };
+        speechStartTimeRef.current = Date.now();
+        await audio.play();
+        return;
+      } catch (err) {
+        console.warn("Falha no áudio em cache:", err);
+      }
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
+
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: item.text,
+          speakerRole: item.role,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.audioUrl && isSpeakingRef.current) {
+          // Store in cache (capped at 30 items)
+          if (ttsCacheRef.current.size >= 30) {
+            const firstKey = ttsCacheRef.current.keys().next().value;
+            if (firstKey) ttsCacheRef.current.delete(firstKey);
+          }
+          ttsCacheRef.current.set(cacheKey, data.audioUrl);
+
+          const audio = new Audio(data.audioUrl);
+          audioPlayerRef.current = audio;
+          audio.onended = () => {
+            setTimeout(processNextSpeechItem, 250);
+          };
+          audio.onerror = () => {
+            playWithWebSpeechFallback(item.text, item.role, processNextSpeechItem);
+          };
+          speechStartTimeRef.current = Date.now();
+          await audio.play();
+          return;
+        }
+      }
+    } catch (apiErr) {
+      // If server TTS timed out or errored, immediately fall back to browser Web Speech
+    }
+
+    // Method C: High-fidelity Web Speech Synthesis fallback
+    if (isSpeakingRef.current) {
+      playWithWebSpeechFallback(item.text, item.role, processNextSpeechItem);
+    }
+  }, [playWithWebSpeechFallback, restartRecognitionSafely]);
+
+  // Public method to enqueue speech (Dialética or Arbitrator)
+  const speakText = useCallback(
+    (text: string, role: "dialetica" | "arbitro" = "dialetica", base64Audio?: string) => {
+      speechQueueRef.current.push({ text, role, base64: base64Audio });
+      if (!isPlayingQueueRef.current) {
+        processNextSpeechItem();
       }
     },
-    [clearSilenceDebounce]
+    [processNextSpeechItem]
   );
 
   // Initialize Speech Recognition once
@@ -291,78 +618,67 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
           ...prev,
           isListening: true,
           activeSpeaker: isSpeakingRef.current ? prev.activeSpeaker : "user",
-          vadPhase: "listening",
+          vadPhase: isSpeakingRef.current ? "speaking" : "listening",
           micPermissionDenied: false,
         }));
       };
 
-      // Native speech start event: instant barge-in if AI is speaking
+      // Native speech start event: barge-in only after grace period
       recognition.onspeechstart = () => {
         if (isSpeakingRef.current) {
-          stopSpeaking(true);
-        }
-      };
-
-      recognition.onsoundstart = () => {
-        if (isSpeakingRef.current) {
-          stopSpeaking(true);
+          const elapsed = Date.now() - speechStartTimeRef.current;
+          if (elapsed > 700) {
+            stopSpeaking(true);
+          }
         }
       };
 
       recognition.onresult = (event: any) => {
-        // If AI is speaking, user speech stops it immediately!
+        // If AI is speaking, ignore incoming recognition results unless user explicitly interrupted
         if (isSpeakingRef.current) {
-          stopSpeaking(true);
-        }
-
-        let interimText = "";
-        let finalText = "";
-        let isFinalBatch = false;
-
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            finalText += event.results[i][0].transcript;
-            isFinalBatch = true;
+          const elapsed = Date.now() - speechStartTimeRef.current;
+          if (elapsed > 700) {
+            stopSpeaking(true);
           } else {
-            interimText += event.results[i][0].transcript;
+            return;
           }
         }
 
-        const combined = (finalText || interimText).trim();
+        // Build accumulated transcript across all results in current session
+        let finalAccumulated = "";
+        let interimAccumulated = "";
+
+        for (let i = 0; i < event.results.length; ++i) {
+          const result = event.results[i];
+          if (result.isFinal) {
+            finalAccumulated += result[0].transcript + " ";
+          } else {
+            interimAccumulated += result[0].transcript;
+          }
+        }
+
+        const combined = (finalAccumulated + interimAccumulated).trim();
         if (!combined) return;
 
         currentSpeechTextRef.current = combined;
 
-        // Determine smart silence window based on natural speech cadence
-        const lower = combined.toLowerCase();
-        const hasQuestionMark = combined.includes("?");
-        const hasQuestionCadence =
-          hasQuestionMark ||
-          /(o que você acha|o que acha|concorda|acha que|como assim|por que|qual a|qual é|né\?|certo\?|faz sentido\?|me diga|qual o motivo|o que significa)$/i.test(
-            lower
-          );
+        // Perform smart Portuguese cadence analysis
+        const cadence = detectSpeechCadence(combined);
+        const pauseDelayMs = cadence.pauseDelayMs;
 
-        let pauseDelayMs = 1050; // default conversational pause (breathing gap)
-
-        if (hasQuestionCadence) {
-          // Question asked: fast conversational turn-taking
-          pauseDelayMs = 650;
-        } else if (isFinalBatch && combined.length > 8) {
-          // Complete utterance boundary finalized by speech recognizer
-          pauseDelayMs = 800;
-        }
+        const nextPhase: VADPhase = cadence.isQuestion ? "question_detected" : "pause_detected";
 
         setVoiceState((prev) => ({
           ...prev,
           liveTranscript: combined,
           activeSpeaker: "user",
-          vadPhase: "pause_detected",
+          vadPhase: nextPhase,
           silenceCountdownMs: pauseDelayMs,
+          cadenceHint: cadence.label,
         }));
 
-        // Reset silence timer
-        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-        if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+        // Reset silence countdown timer
+        clearSilenceDebounce();
 
         let remaining = pauseDelayMs;
         countdownIntervalRef.current = setInterval(() => {
@@ -396,12 +712,20 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
       };
 
       recognition.onend = () => {
-        // Continuous conversational loop: if listening is enabled, auto-restart
-        if (isListeningRef.current) {
-          try {
-            recognition.start();
-          } catch (e) {
-            // Already active or transient
+        // If continuous session is active:
+        if (isContinuousSessionRef.current) {
+          // If speech was captured and waiting, dispatch it immediately!
+          if (currentSpeechTextRef.current.trim().length >= 2 && !isSpeakingRef.current) {
+            triggerSendTurn();
+          } else {
+            // Auto restart recognition after brief debounce
+            setTimeout(() => {
+              if (isContinuousSessionRef.current && !isSpeakingRef.current && recognitionRef.current) {
+                try {
+                  recognitionRef.current.start();
+                } catch (e) {}
+              }
+            }, 100);
           }
         } else {
           setVoiceState((prev) => ({
@@ -429,9 +753,10 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
     };
   }, [stopSpeaking, triggerSendTurn, clearSilenceDebounce, teardownMicAudio]);
 
-  // Start listening to user voice
+  // Start continuous conversational voice session (Gemini Live Mode)
   const startListening = useCallback(async () => {
     stopSpeaking();
+    isContinuousSessionRef.current = true;
     isListeningRef.current = true;
 
     // Initialize Web Audio API energy monitoring
@@ -449,14 +774,16 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
         isListening: true,
         activeSpeaker: "user",
         vadPhase: "listening",
+        cadenceHint: "Modo Conversa Contínua ativo • Fale com naturalidade",
       }));
     } catch (e) {
-      // already active
+      // Already active
     }
   }, [stopSpeaking, initMicAudioContext]);
 
-  // Stop listening
+  // Stop listening session
   const stopListening = useCallback(() => {
+    isContinuousSessionRef.current = false;
     isListeningRef.current = false;
     clearSilenceDebounce();
     teardownMicAudio();
@@ -471,145 +798,10 @@ export function useDialeticaVoice(onUserSpoken: (text: string) => void) {
       isListening: false,
       micVolume: 0,
       vadPhase: "idle",
+      cadenceHint: undefined,
       activeSpeaker: prev.isSpeaking ? prev.activeSpeaker : "idle",
     }));
   }, [clearSilenceDebounce, teardownMicAudio]);
-
-  // Internal audio queue processor
-  const processNextSpeechItem = useCallback(async () => {
-    if (speechQueueRef.current.length === 0) {
-      isPlayingQueueRef.current = false;
-      isSpeakingRef.current = false;
-      setVoiceState((prev) => ({
-        ...prev,
-        isSpeaking: false,
-        activeSpeaker: isListeningRef.current ? "user" : "idle",
-        vadPhase: isListeningRef.current ? "listening" : "idle",
-      }));
-      return;
-    }
-
-    isPlayingQueueRef.current = true;
-    isSpeakingRef.current = true;
-    const item = speechQueueRef.current.shift()!;
-
-    setVoiceState((prev) => ({
-      ...prev,
-      isSpeaking: true,
-      activeSpeaker: item.role,
-      vadPhase: "speaking",
-    }));
-
-    // Method A: If base64 audio is already provided
-    if (item.base64) {
-      try {
-        const audio = new Audio(item.base64);
-        audioPlayerRef.current = audio;
-        audio.onended = () => {
-          setTimeout(processNextSpeechItem, 350); // Natural conversational pause
-        };
-        audio.onerror = () => {
-          playWithWebSpeechFallback(item.text, item.role, processNextSpeechItem);
-        };
-        await audio.play();
-        return;
-      } catch (err) {
-        console.warn("Falha ao reproduzir áudio base64 pré-gerado, usando fallback:", err);
-      }
-    }
-
-    // Method B: Call server TTS endpoint
-    try {
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: item.text,
-          speakerRole: item.role,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (data.audioUrl) {
-        const audio = new Audio(data.audioUrl);
-        audioPlayerRef.current = audio;
-        audio.onended = () => {
-          setTimeout(processNextSpeechItem, 380);
-        };
-        audio.onerror = () => {
-          playWithWebSpeechFallback(item.text, item.role, processNextSpeechItem);
-        };
-        await audio.play();
-        return;
-      }
-    } catch (apiErr) {
-      console.warn("TTS backend offline ou erro, usando sintetizador nativo Web Speech:", apiErr);
-    }
-
-    // Method C: High-fidelity Web Speech Synthesis fallback
-    playWithWebSpeechFallback(item.text, item.role, processNextSpeechItem);
-  }, []);
-
-  // Native Web Speech Synthesis player with distinct timbre/pitch
-  const playWithWebSpeechFallback = (
-    text: string,
-    role: "dialetica" | "arbitro",
-    onComplete: () => void
-  ) => {
-    if (typeof window === "undefined" || !window.speechSynthesis) {
-      onComplete();
-      return;
-    }
-
-    window.speechSynthesis.cancel();
-
-    // Clean text for natural speech
-    const cleaned = text
-      .replace(/[*_#`~>\[\]]/g, "")
-      .replace(/\(http[^)]+\)/g, "")
-      .slice(0, 1000);
-
-    const utterance = new SpeechSynthesisUtterance(cleaned);
-    utterance.lang = "pt-BR";
-
-    // Distinct vocal signatures:
-    if (role === "arbitro") {
-      // O Árbitro: voz mais grave, cadenciada, solene de juiz
-      utterance.pitch = 0.78;
-      utterance.rate = 0.95;
-    } else {
-      // O Dialética: voz reflexiva, clara, dinâmica
-      utterance.pitch = 1.02;
-      utterance.rate = 1.05;
-    }
-
-    const voices = window.speechSynthesis.getVoices();
-    const ptVoice = voices.find((v) => v.lang.startsWith("pt")) || voices[0];
-    if (ptVoice) {
-      utterance.voice = ptVoice;
-    }
-
-    utterance.onend = () => {
-      setTimeout(onComplete, 300);
-    };
-    utterance.onerror = () => {
-      onComplete();
-    };
-
-    window.speechSynthesis.speak(utterance);
-  };
-
-  // Public method to enqueue speech (Dialética or Arbitrator)
-  const speakText = useCallback(
-    (text: string, role: "dialetica" | "arbitro" = "dialetica", base64Audio?: string) => {
-      speechQueueRef.current.push({ text, role, base64: base64Audio });
-      if (!isPlayingQueueRef.current) {
-        processNextSpeechItem();
-      }
-    },
-    [processNextSpeechItem]
-  );
 
   return {
     voiceState,

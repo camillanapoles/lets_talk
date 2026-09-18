@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, memo } from "react";
 import Markdown from "react-markdown";
 import { Message, GeneratedImage } from "../types";
 import { DEBATE_ROLES, GEMINI_MODELS } from "../data/constants";
@@ -27,7 +27,7 @@ interface ChatMessageItemProps {
   isAudioPlaying?: boolean;
 }
 
-export function ChatMessageItem({
+export const ChatMessageItem = memo(function ChatMessageItem({
   message,
   onRequestImageForMessage,
   onZoomImage,
@@ -238,5 +238,5 @@ export function ChatMessageItem({
       </div>
     </div>
   );
-}
+});
 

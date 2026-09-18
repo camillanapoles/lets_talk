@@ -34,6 +34,7 @@ interface VoiceLiveArenaProps {
   silenceCountdownMs?: number;
   interruptedCount?: number;
   customTopic?: string;
+  cadenceHint?: string;
   messages: Message[];
   selectedRole: DebateRole;
   selectedModel: ModelId;
@@ -64,6 +65,7 @@ export function VoiceLiveArena({
   silenceCountdownMs = 0,
   interruptedCount = 0,
   customTopic = "Livre",
+  cadenceHint,
   messages,
   selectedRole,
   selectedModel,
@@ -133,6 +135,17 @@ export function VoiceLiveArena({
         speakerIcon: <Scale className="w-4 h-4 text-indigo-400" />,
       };
     }
+    if (activeSpeaker === "dialetica" && vadPhase === "processing") {
+      return {
+        glow: "from-indigo-500/50 via-cyan-600/30 to-purple-600/30",
+        border: "border-cyan-400/70",
+        ring: "ring-cyan-400/50",
+        orbGradient: "from-cyan-500 via-indigo-600 to-purple-600",
+        statusText: "Dialética Sintetizando Resposta...",
+        subStatus: "Processando rigor lógico e premissas empíricas",
+        speakerIcon: <Zap className="w-4 h-4 text-cyan-300 animate-pulse" />,
+      };
+    }
     if (activeSpeaker === "dialetica" || isSpeaking) {
       return {
         glow: "from-cyan-500/40 via-blue-600/30 to-purple-600/20",
@@ -140,19 +153,30 @@ export function VoiceLiveArena({
         ring: "ring-cyan-400/40",
         orbGradient: "from-cyan-500 via-blue-600 to-purple-600",
         statusText: "Dialética Discursando",
-        subStatus: "Fale a qualquer momento para interromper",
+        subStatus: "Toque no orbe ou fale com firmeza para interromper",
         speakerIcon: <Volume2 className="w-4 h-4 text-cyan-400" />,
       };
     }
     if (activeSpeaker === "user" || isListening) {
+      if (vadPhase === "question_detected") {
+        return {
+          glow: "from-amber-500/50 via-yellow-600/30 to-emerald-500/30",
+          border: "border-amber-400/80",
+          ring: "ring-amber-400/60",
+          orbGradient: "from-amber-500 via-yellow-500 to-emerald-500",
+          statusText: "Pergunta Identificada",
+          subStatus: cadenceHint || `Disparando réplica rápida em ${(silenceCountdownMs / 1000).toFixed(1)}s`,
+          speakerIcon: <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />,
+        };
+      }
       if (vadPhase === "pause_detected") {
         return {
           glow: "from-teal-500/50 via-emerald-600/30 to-cyan-500/30",
           border: "border-teal-400/60",
           ring: "ring-teal-400/50",
           orbGradient: "from-teal-500 via-emerald-500 to-cyan-600",
-          statusText: "Pausa Detectada",
-          subStatus: `Disparando resposta em ${(silenceCountdownMs / 1000).toFixed(1)}s`,
+          statusText: "Pausa Reflexiva Detectada",
+          subStatus: cadenceHint || `Concluindo turno em ${(silenceCountdownMs / 1000).toFixed(1)}s`,
           speakerIcon: <Zap className="w-4 h-4 text-teal-300 animate-pulse" />,
         };
       }
@@ -161,8 +185,8 @@ export function VoiceLiveArena({
         border: "border-emerald-400/50",
         ring: "ring-emerald-400/40",
         orbGradient: "from-emerald-500 via-teal-500 to-cyan-600",
-        statusText: liveTranscript ? "Ouvindo sua fala..." : "Ouvindo você...",
-        subStatus: "Fale com naturalidade • Pausa ou pergunta dispara resposta",
+        statusText: liveTranscript ? "Ouvindo sua fala..." : "Sua vez • Fale ao microfone",
+        subStatus: cadenceHint || "Modo Conversa Contínua (Gemini Live) ativo",
         speakerIcon: <Mic className="w-4 h-4 text-emerald-400" />,
       };
     }
@@ -172,7 +196,7 @@ export function VoiceLiveArena({
       ring: "ring-slate-700/30",
       orbGradient: "from-slate-700 via-slate-800 to-slate-900",
       statusText: "Canal de Voz em Espera",
-      subStatus: "Toque no microfone para debater por voz",
+      subStatus: "Toque no orbe ou microfone para debater por voz",
       speakerIcon: <Sparkles className="w-4 h-4 text-slate-400" />,
     };
   };
@@ -371,10 +395,28 @@ export function VoiceLiveArena({
 
           {/* Central Fluid Glowing Orb */}
           <div
-            className={`w-28 h-28 sm:w-36 sm:h-36 rounded-full bg-gradient-to-tr ${visualStyle.orbGradient} p-1 shadow-[0_0_50px_rgba(6,182,212,0.4)] flex items-center justify-center transition-transform duration-150`}
+            onClick={() => {
+              if (isSpeaking) {
+                onStopSpeaking();
+              } else if (isListening && liveTranscript && onTriggerManualSend) {
+                onTriggerManualSend();
+              } else {
+                onToggleMic();
+              }
+            }}
+            className={`w-28 h-28 sm:w-36 sm:h-36 rounded-full bg-gradient-to-tr ${visualStyle.orbGradient} p-1 shadow-[0_0_50px_rgba(6,182,212,0.4)] flex items-center justify-center transition-transform duration-150 cursor-pointer hover:brightness-110 active:scale-95`}
             style={{
               transform: `scale(${orbScaleMultiplier})`,
             }}
+            title={
+              isSpeaking
+                ? "Clique no orbe para interromper (barge-in imediato)"
+                : isListening && liveTranscript
+                ? "Clique no orbe para enviar fala imediatamente"
+                : isListening
+                ? "Clique para pausar microfone"
+                : "Clique para ativar conversa contínua por voz"
+            }
           >
             <div className="w-full h-full rounded-full bg-[#090e1a]/85 backdrop-blur-sm flex flex-col items-center justify-center gap-1 text-white">
               {/* Animated Equalizer Wave Bars reacting dynamically to speech */}
@@ -402,15 +444,19 @@ export function VoiceLiveArena({
                 })}
               </div>
 
-              <span className="text-[10px] font-mono tracking-tight text-cyan-200">
+              <span className="text-[10px] font-mono tracking-tight text-cyan-200 text-center px-1">
                 {activeSpeaker === "arbitro"
                   ? "Árbitro"
-                  : activeSpeaker === "dialetica"
-                  ? "Dialética"
+                  : isSpeaking
+                  ? "Interromper"
+                  : vadPhase === "processing"
+                  ? "Pensando..."
+                  : vadPhase === "question_detected"
+                  ? "Pergunta!"
+                  : vadPhase === "pause_detected"
+                  ? "Pausa..."
                   : isListening
-                  ? vadPhase === "pause_detected"
-                    ? "Pausa..."
-                    : "Escutando"
+                  ? "Escutando"
                   : "Voz Live"}
               </span>
             </div>
@@ -447,10 +493,16 @@ export function VoiceLiveArena({
               <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">
                 Você falando...
               </span>
+              {vadPhase === "question_detected" && (
+                <span className="text-[10px] text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded-full border border-amber-500/40 flex items-center gap-1 font-mono shadow-sm">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping"></span>
+                  Pergunta detectada ({((silenceCountdownMs || 550) / 1000).toFixed(1)}s)
+                </span>
+              )}
               {vadPhase === "pause_detected" && (
                 <span className="text-[10px] text-teal-300 bg-teal-950/80 px-2 py-0.5 rounded-full border border-teal-500/30 flex items-center gap-1 font-mono">
                   <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-ping"></span>
-                  Pausa detectada ({((silenceCountdownMs || 600) / 1000).toFixed(1)}s)
+                  Pausa detectada ({((silenceCountdownMs || 750) / 1000).toFixed(1)}s)
                 </span>
               )}
             </div>
@@ -635,14 +687,18 @@ export function VoiceLiveArena({
 
         <p className="text-[11px] text-slate-400 font-mono text-center">
           {isSpeaking
-            ? "Dialética falando • Fale para interromper (barge-in automático)"
+            ? "Dialética falando • Toque no orbe ou fale para interromper (barge-in)"
+            : vadPhase === "processing"
+            ? "Dialética formulando réplica dialética concisa..."
+            : vadPhase === "question_detected"
+            ? `Pergunta identificada (${((silenceCountdownMs || 550) / 1000).toFixed(1)}s) • Disparando resposta rápida...`
             : vadPhase === "pause_detected"
-            ? `Silêncio detectado (${((silenceCountdownMs || 600) / 1000).toFixed(1)}s) • Disparando resposta...`
+            ? `Silêncio detectado (${((silenceCountdownMs || 750) / 1000).toFixed(1)}s) • Concluindo turno...`
             : isListening && liveTranscript
             ? "Ouvindo sua fala • Pausa ou pergunta dispara resposta imediata"
             : isListening
-            ? "Ouvindo você • Detecção precisa de voz e silêncio ativa"
-            : "Toque para abrir canal de voz"}
+            ? "Modo Conversa Contínua (Gemini Live) • Fale com naturalidade"
+            : "Toque no orbe ou microfone para abrir canal de voz contínuo"}
         </p>
       </div>
     </div>

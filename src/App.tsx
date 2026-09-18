@@ -28,6 +28,7 @@ import { DebateModeModal } from "./components/DebateModeModal";
 import { ArtifactsModal } from "./components/ArtifactsModal";
 import { VoiceLiveArena } from "./components/VoiceLiveArena";
 import { SessionsManagerModal } from "./components/SessionsManagerModal";
+import { SystemDiagnosticsModal } from "./components/SystemDiagnosticsModal";
 import {
   loadSavedSessions,
   saveDebateSession,
@@ -179,6 +180,7 @@ export default function App() {
   const [isEpistemicGuideOpen, setIsEpistemicGuideOpen] = useState(false);
   const [isDebateModeModalOpen, setIsDebateModeModalOpen] = useState(false);
   const [isArtifactsModalOpen, setIsArtifactsModalOpen] = useState(false);
+  const [isDiagnosticsModalOpen, setIsDiagnosticsModalOpen] = useState(false);
   const [imageStudioInitialPrompt, setImageStudioInitialPrompt] = useState("");
   const [zoomedImage, setZoomedImage] = useState<GeneratedImage | null>(null);
 
@@ -335,10 +337,16 @@ export default function App() {
   );
 
   // Multi-turn message sender
-  const handleSendMessage = async (text: string, attachedImg?: GeneratedImage) => {
+  const handleSendMessage = async (
+    text: string,
+    attachedImg?: GeneratedImage,
+    isVoiceTurn?: boolean
+  ) => {
     if (!text.trim() || isLoading) return;
 
     setErrorMessage(null);
+
+    const isVoice = isVoiceTurn || sessionUIMode === "voice_live";
 
     const userMessage: Message = {
       id: `usr-${Date.now()}`,
@@ -388,6 +396,7 @@ export default function App() {
             roleId: selectedRole.id,
             adaptiveTone: "mirror_user",
             debateMode,
+            isVoiceMode: isVoice,
             topic: debateMode === "formal" ? formalState.topic : customTopic,
             formalRound:
               debateMode === "formal"
@@ -471,6 +480,7 @@ export default function App() {
             roleId: selectedRole.id,
             adaptiveTone: "mirror_user",
             debateMode,
+            isVoiceMode: isVoice,
             topic: debateMode === "formal" ? formalState.topic : customTopic,
             formalRound:
               debateMode === "formal"
@@ -543,10 +553,10 @@ export default function App() {
   // Voice recognition hook connected to message sender
   const handleUserVoiceSpoken = useCallback(
     (spokenText: string) => {
-      handleSendMessage(spokenText);
+      handleSendMessage(spokenText, undefined, true);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [messages, selectedModel, selectedRole]
+    [messages, selectedModel, selectedRole, sessionUIMode]
   );
 
   const {
@@ -918,6 +928,7 @@ export default function App() {
           onOpenDebateModeModal={() => setIsDebateModeModalOpen(true)}
           onOpenArtifactsModal={() => setIsArtifactsModalOpen(true)}
           onOpenSessionsModal={() => setIsSessionsModalOpen(true)}
+          onOpenDiagnostics={() => setIsDiagnosticsModalOpen(true)}
           onToggleSessionUIMode={() =>
             setSessionUIMode((prev) => (prev === "voice_live" ? "text_chat" : "voice_live"))
           }
@@ -954,6 +965,7 @@ export default function App() {
             vadPhase={voiceState.vadPhase}
             silenceCountdownMs={voiceState.silenceCountdownMs}
             interruptedCount={voiceState.interruptedCount}
+            cadenceHint={voiceState.cadenceHint}
             customTopic={customTopic}
             messages={messages}
             selectedRole={selectedRole}
@@ -1101,6 +1113,12 @@ export default function App() {
       <EpistemicGuideModal
         isOpen={isEpistemicGuideOpen}
         onClose={() => setIsEpistemicGuideOpen(false)}
+      />
+
+      {/* System Engineering Diagnostics & Validity Test Suite Modal */}
+      <SystemDiagnosticsModal
+        isOpen={isDiagnosticsModalOpen}
+        onClose={() => setIsDiagnosticsModalOpen(false)}
       />
 
       {/* Global Image Zoom Lightbox */}
